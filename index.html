@@ -1,0 +1,314 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>SINAPS — Operations Dashboard Demo</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&family=Inter:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg: #0A0E14;
+    --panel: #121821;
+    --panel-2: #161D28;
+    --border: #212B38;
+    --blue: #4C8DFF;
+    --amber: #F2A93B;
+    --green: #35D399;
+    --red: #F4685C;
+    --text: #E8ECF1;
+    --muted: #8792A2;
+    --muted-2: #5C6779;
+  }
+  *{box-sizing:border-box; margin:0; padding:0;}
+  body{
+    background: radial-gradient(1200px 600px at 15% -10%, #10182A 0%, var(--bg) 55%);
+    color: var(--text);
+    font-family: 'Inter', sans-serif;
+    padding: 28px;
+    min-height: 100vh;
+  }
+  .wrap{ max-width: 1240px; margin: 0 auto; }
+
+  /* Top bar */
+  .topbar{
+    display:flex; justify-content:space-between; align-items:center;
+    margin-bottom: 24px; flex-wrap: wrap; gap: 16px;
+  }
+  .brand{ display:flex; align-items:center; gap: 12px; }
+  .brand-mark{
+    width: 34px; height: 34px; border-radius: 8px;
+    background: linear-gradient(135deg, var(--blue), #2C5FD9);
+    display:flex; align-items:center; justify-content:center;
+    font-family:'IBM Plex Mono'; font-weight:600; font-size:14px; color:#fff;
+  }
+  .brand-name{ font-family:'IBM Plex Sans'; font-weight:600; font-size:16px; }
+  .brand-sub{ font-size:11px; color: var(--muted); font-family:'IBM Plex Mono'; letter-spacing:.04em;}
+  .topbar-right{ display:flex; align-items:center; gap: 12px; flex-wrap: wrap; }
+  .live{
+    display:flex; align-items:center; gap:8px; font-family:'IBM Plex Mono'; font-size:12px; color: var(--green);
+    background: rgba(53,211,153,0.08); border:1px solid rgba(53,211,153,0.25); padding: 6px 12px; border-radius: 20px;
+  }
+  .live-dot{ width:7px; height:7px; border-radius:50%; background: var(--green); box-shadow: 0 0 0 0 rgba(53,211,153,.6); animation: pulse 2s infinite; }
+  @keyframes pulse{
+    0%{ box-shadow: 0 0 0 0 rgba(53,211,153,.5); }
+    70%{ box-shadow: 0 0 0 8px rgba(53,211,153,0); }
+    100%{ box-shadow: 0 0 0 0 rgba(53,211,153,0); }
+  }
+  .lang-switch{
+    display:flex; font-family:'IBM Plex Mono'; font-size:11px; border:1px solid var(--border);
+    border-radius: 20px; overflow:hidden; background: var(--panel);
+  }
+  .lang-btn{
+    background:none; border:none; color: var(--muted); padding: 6px 13px; cursor:pointer; font-family:'IBM Plex Mono'; font-size:11px;
+    transition: all .15s ease;
+  }
+  .lang-btn.active{ background: var(--blue); color:#fff; }
+
+  .eyebrow{ font-family:'IBM Plex Mono'; font-size:11px; letter-spacing:.08em; color: var(--muted-2); text-transform:uppercase; margin-bottom:6px;}
+  .h1{ font-family:'IBM Plex Sans'; font-size: 22px; font-weight:600; margin-bottom: 4px;}
+  .h1 span{ color: var(--muted); font-weight:400; }
+  .header-block{ margin-bottom: 22px; }
+
+  /* KPI strip */
+  .kpi-grid{
+    display:grid; grid-template-columns: repeat(4, 1fr); gap: 14px; margin-bottom: 22px;
+  }
+  .kpi{
+    background: var(--panel); border:1px solid var(--border); border-radius: 12px; padding: 18px;
+    opacity:0; transform: translateY(10px); animation: rise .5s ease forwards;
+  }
+  .kpi:nth-child(1){animation-delay:.05s} .kpi:nth-child(2){animation-delay:.15s}
+  .kpi:nth-child(3){animation-delay:.25s} .kpi:nth-child(4){animation-delay:.35s}
+  @keyframes rise{ to{ opacity:1; transform:none; } }
+  .kpi-label{ font-size:12px; color: var(--muted); margin-bottom: 10px; }
+  .kpi-value{ font-family:'IBM Plex Mono'; font-size: 26px; font-weight:600; }
+  .kpi-delta{ font-size: 12px; margin-top: 6px; font-family:'IBM Plex Mono'; }
+  .up{ color: var(--green); } .down{ color: var(--red); }
+
+  /* Main grid */
+  .main-grid{ display:grid; grid-template-columns: 1.55fr 1fr; gap: 16px; margin-bottom:16px; }
+  .panel{
+    background: var(--panel); border:1px solid var(--border); border-radius: 14px; padding: 18px;
+  }
+  .panel-head{ display:flex; justify-content:space-between; align-items:baseline; margin-bottom: 16px; }
+  .panel-title{ font-family:'IBM Plex Sans'; font-weight:600; font-size:14px; }
+  .panel-note{ font-size:11px; color: var(--muted-2); font-family:'IBM Plex Mono'; }
+
+  /* CRM pipeline */
+  .pipeline{ display:grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }
+  .col-head{ font-size:11px; font-family:'IBM Plex Mono'; color: var(--muted); text-transform:uppercase; letter-spacing:.04em; margin-bottom:10px; display:flex; justify-content:space-between; }
+  .col-count{ background: var(--panel-2); border-radius:10px; padding:1px 7px; color: var(--text); }
+  .card{
+    background: var(--panel-2); border:1px solid var(--border); border-radius: 10px; padding: 10px 12px; margin-bottom: 8px;
+    opacity:0; transform: translateY(8px); animation: rise .4s ease forwards;
+  }
+  .card-company{ font-size:13px; font-weight:500; margin-bottom:6px; }
+  .card-meta{ display:flex; justify-content:space-between; align-items:center; }
+  .card-value{ font-family:'IBM Plex Mono'; font-size:12px; color: var(--amber); }
+  .card-tag{ font-size:10px; font-family:'IBM Plex Mono'; padding:2px 6px; border-radius:5px; }
+  .tag-ai{ background: rgba(76,141,255,.12); color: var(--blue); }
+  .tag-human{ background: rgba(140,150,165,.12); color: var(--muted); }
+  .tag-won{ background: rgba(53,211,153,.12); color: var(--green); }
+
+  /* Cash board */
+  .cash-total{ font-family:'IBM Plex Mono'; font-size: 30px; font-weight:600; margin-bottom:2px;}
+  .cash-sub{ font-size:12px; color:var(--muted); margin-bottom:16px; }
+  .chart-wrap{ margin-bottom: 16px; }
+  .bars{ display:flex; align-items:flex-end; gap:6px; height: 90px; }
+  .bar{ flex:1; background: linear-gradient(180deg, var(--blue), #2C5FD9); border-radius: 4px 4px 0 0; opacity:0; transform: scaleY(0); transform-origin:bottom; animation: grow .6s ease forwards; }
+  @keyframes grow{ to{ opacity:1; transform:scaleY(1); } }
+  .bar-labels{ display:flex; gap:6px; margin-top:6px; }
+  .bar-labels span{ flex:1; text-align:center; font-size:10px; color: var(--muted-2); font-family:'IBM Plex Mono'; }
+
+  .breakdown-row{ display:flex; justify-content:space-between; font-size:12px; padding: 8px 0; border-top:1px solid var(--border); }
+  .breakdown-row .val{ font-family:'IBM Plex Mono'; color: var(--text); }
+
+  /* Architecture */
+  .arch{ display:flex; align-items:center; justify-content:space-between; gap: 8px; flex-wrap: wrap; padding: 8px 0 4px; }
+  .arch-step{
+    flex:1; min-width:150px; background: var(--panel-2); border:1px solid var(--border); border-radius:10px;
+    padding: 14px; text-align:center;
+  }
+  .arch-icon{ font-family:'IBM Plex Mono'; font-size:11px; color: var(--blue); margin-bottom:8px; letter-spacing:.05em; }
+  .arch-title{ font-size:13px; font-weight:500; margin-bottom:4px; }
+  .arch-desc{ font-size:11px; color: var(--muted); line-height:1.4; }
+  .arch-arrow{ color: var(--muted-2); font-size:18px; padding: 0 4px; }
+
+  .footer-note{ text-align:center; font-size:11px; color: var(--muted-2); font-family:'IBM Plex Mono'; margin-top: 22px; }
+
+  @media (max-width: 900px){
+    .kpi-grid{ grid-template-columns: repeat(2,1fr); }
+    .main-grid{ grid-template-columns: 1fr; }
+    .pipeline{ grid-template-columns: repeat(2,1fr); }
+    .arch{ flex-direction:column; }
+    .arch-arrow{ transform: rotate(90deg); }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <div class="topbar">
+    <div class="brand">
+      <div class="brand-mark">SN</div>
+      <div>
+        <div class="brand-name">SINAPS · Operations Console</div>
+        <div class="brand-sub" data-en="DEMO WORKSPACE — NORTHGATE LOGISTICS" data-ru="ДЕМО-ПРОСТРАНСТВО — NORTHGATE LOGISTICS">DEMO WORKSPACE — NORTHGATE LOGISTICS</div>
+      </div>
+    </div>
+    <div class="topbar-right">
+      <div class="live"><span class="live-dot"></span> <span data-en="LIVE SYNC · CRM + AI QUALIFICATION" data-ru="LIVE-СИНХРОНИЗАЦИЯ · CRM + AI КВАЛИФИКАЦИЯ">LIVE SYNC · CRM + AI QUALIFICATION</span></div>
+      <div class="lang-switch">
+        <button class="lang-btn active" id="btn-en" onclick="setLang('en')">EN</button>
+        <button class="lang-btn" id="btn-ru" onclick="setLang('ru')">RU</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="header-block">
+    <div class="eyebrow" data-en="90 days after go-live" data-ru="90 дней после внедрения">90 days after go-live</div>
+    <div class="h1"><span data-en="What the client's operations look like " data-ru="Как выглядит операционка клиента ">What the client's operations look like </span><span data-en="after automating leads, CRM, and reporting" data-ru="после автоматизации лидов, CRM и отчётности">after automating leads, CRM, and reporting</span></div>
+  </div>
+
+  <div class="kpi-grid">
+    <div class="kpi">
+      <div class="kpi-label" data-en="Manual hours saved / month" data-ru="Ручных часов сэкономлено / мес">Manual hours saved / month</div>
+      <div class="kpi-value" data-en="142 h" data-ru="142 ч">142 h</div>
+      <div class="kpi-delta up" data-en="↑ was 6 h/day of manual entry" data-ru="↑ было 6 ч/день ручного ввода">↑ was 6 h/day of manual entry</div>
+    </div>
+    <div class="kpi">
+      <div class="kpi-label" data-en="Lead response time" data-ru="Скорость ответа на лид">Lead response time</div>
+      <div class="kpi-value" data-en="4.2 min" data-ru="4.2 мин">4.2 min</div>
+      <div class="kpi-delta up" data-en="↓ 38% faster (was 6.8 min)" data-ru="↓ 38% быстрее (было 6.8 мин)">↓ 38% faster (was 6.8 min)</div>
+    </div>
+    <div class="kpi">
+      <div class="kpi-label" data-en="CRM data accuracy" data-ru="Точность данных в CRM">CRM data accuracy</div>
+      <div class="kpi-value">94%</div>
+      <div class="kpi-delta up" data-en="↑ was ~61% (manual entry)" data-ru="↑ было ~61% (ручной ввод)">↑ was ~61% (manual entry)</div>
+    </div>
+    <div class="kpi">
+      <div class="kpi-label" data-en="Revenue under auto-tracking" data-ru="Выручка под авто-учётом">Revenue under auto-tracking</div>
+      <div class="kpi-value">$186k</div>
+      <div class="kpi-delta up" data-en="↑ 100% of deals tracked" data-ru="↑ 100% сделок отслеживается">↑ 100% of deals tracked</div>
+    </div>
+  </div>
+
+  <div class="main-grid">
+    <div class="panel">
+      <div class="panel-head">
+        <div class="panel-title" data-en="Lead pipeline — CRM (auto-sync)" data-ru="Pipeline лидов — CRM (авто-синхронизация)">Lead pipeline — CRM (auto-sync)</div>
+        <div class="panel-note" data-en="Sources: website, WhatsApp, Instagram" data-ru="Источники: сайт, WhatsApp, Instagram">Sources: website, WhatsApp, Instagram</div>
+      </div>
+      <div class="pipeline">
+        <div>
+          <div class="col-head"><span data-en="New lead" data-ru="Новый лид">New lead</span> <span class="col-count">18</span></div>
+          <div class="card" style="animation-delay:.1s"><div class="card-company">Vega Print LLC</div><div class="card-meta"><span class="card-tag tag-ai" data-en="AI qualified" data-ru="AI квалиф.">AI qualified</span><span class="card-value">$4,200</span></div></div>
+          <div class="card" style="animation-delay:.15s"><div class="card-company">Bright Freight Co</div><div class="card-meta"><span class="card-tag tag-ai" data-en="AI qualified" data-ru="AI квалиф.">AI qualified</span><span class="card-value">$1,850</span></div></div>
+          <div class="card" style="animation-delay:.2s"><div class="card-company">Alder & Finch</div><div class="card-meta"><span class="card-tag tag-human" data-en="Manager" data-ru="Менеджер">Manager</span><span class="card-value">$9,000</span></div></div>
+        </div>
+        <div>
+          <div class="col-head"><span data-en="Qualification" data-ru="Квалификация">Qualification</span> <span class="col-count">11</span></div>
+          <div class="card" style="animation-delay:.15s"><div class="card-company">Solaris Retail Group</div><div class="card-meta"><span class="card-tag tag-ai" data-en="AI qualified" data-ru="AI квалиф.">AI qualified</span><span class="card-value">$6,400</span></div></div>
+          <div class="card" style="animation-delay:.2s"><div class="card-company">Kestrel Logistics</div><div class="card-meta"><span class="card-tag tag-human" data-en="Manager" data-ru="Менеджер">Manager</span><span class="card-value">$3,100</span></div></div>
+        </div>
+        <div>
+          <div class="col-head"><span data-en="Negotiation" data-ru="Переговоры">Negotiation</span> <span class="col-count">6</span></div>
+          <div class="card" style="animation-delay:.2s"><div class="card-company">Morrow Textiles</div><div class="card-meta"><span class="card-tag tag-human" data-en="Manager" data-ru="Менеджер">Manager</span><span class="card-value">$12,750</span></div></div>
+          <div class="card" style="animation-delay:.25s"><div class="card-company">Iron Gate Supply</div><div class="card-meta"><span class="card-tag tag-human" data-en="Manager" data-ru="Менеджер">Manager</span><span class="card-value">$5,300</span></div></div>
+        </div>
+        <div>
+          <div class="col-head"><span data-en="Closed ✓" data-ru="Закрыто ✓">Closed ✓</span> <span class="col-count">9</span></div>
+          <div class="card" style="animation-delay:.25s"><div class="card-company">Northgate Retail</div><div class="card-meta"><span class="card-tag tag-won" data-en="Won" data-ru="Выигран">Won</span><span class="card-value">$8,900</span></div></div>
+          <div class="card" style="animation-delay:.3s"><div class="card-company">Delano Foods</div><div class="card-meta"><span class="card-tag tag-won" data-en="Won" data-ru="Выигран">Won</span><span class="card-value">$2,600</span></div></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="panel">
+      <div class="panel-head">
+        <div class="panel-title">Cash Board</div>
+        <div class="panel-note" data-en="Last 6 months" data-ru="Последние 6 мес.">Last 6 months</div>
+      </div>
+      <div class="cash-total">$186,420</div>
+      <div class="cash-sub" data-en="revenue under auto-tracking, cumulative" data-ru="выручка под авто-учётом, нарастающим итогом">revenue under auto-tracking, cumulative</div>
+      <div class="chart-wrap">
+        <div class="bars">
+          <div class="bar" style="height:38%; animation-delay:.1s"></div>
+          <div class="bar" style="height:52%; animation-delay:.18s"></div>
+          <div class="bar" style="height:47%; animation-delay:.26s"></div>
+          <div class="bar" style="height:68%; animation-delay:.34s"></div>
+          <div class="bar" style="height:81%; animation-delay:.42s"></div>
+          <div class="bar" style="height:100%; animation-delay:.5s"></div>
+        </div>
+        <div class="bar-labels" data-en-list="Mar,Apr,May,Jun,Jul,Aug" data-ru-list="мар,апр,май,июн,июл,авг">
+          <span>Mar</span><span>Apr</span><span>May</span><span>Jun</span><span>Jul</span><span>Aug</span>
+        </div>
+      </div>
+      <div class="breakdown-row"><span data-en="Invoices auto-generated" data-ru="Автоматически выставлено счетов">Invoices auto-generated</span><span class="val">126</span></div>
+      <div class="breakdown-row"><span data-en="Manual entry errors" data-ru="Ошибок ручного ввода">Manual entry errors</span><span class="val">0</span></div>
+      <div class="breakdown-row"><span data-en="Avg. deal close time" data-ru="Ср. время закрытия сделки">Avg. deal close time</span><span class="val" data-en="6.1 days" data-ru="6.1 дня">6.1 days</span></div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-head">
+      <div class="panel-title" data-en="How it works under the hood" data-ru="Как это работает под капотом">How it works under the hood</div>
+      <div class="panel-note" data-en="Automation architecture built by SINAPS" data-ru="Архитектура автоматизации, собранная SINAPS">Automation architecture built by SINAPS</div>
+    </div>
+    <div class="arch">
+      <div class="arch-step">
+        <div class="arch-icon">01 · INTAKE</div>
+        <div class="arch-title" data-en="Lead sources" data-ru="Источники лидов">Lead sources</div>
+        <div class="arch-desc" data-en="Website, WhatsApp, Instagram, calls — all into one entry point" data-ru="Сайт, WhatsApp, Instagram, звонки — всё в одну точку входа">Website, WhatsApp, Instagram, calls — all into one entry point</div>
+      </div>
+      <div class="arch-arrow">→</div>
+      <div class="arch-step">
+        <div class="arch-icon">02 · AI</div>
+        <div class="arch-title" data-en="AI qualification" data-ru="AI-квалификация">AI qualification</div>
+        <div class="arch-desc" data-en="Model scores the lead, sets priority and routing" data-ru="Модель оценивает лид, определяет приоритет и маршрут">Model scores the lead, sets priority and routing</div>
+      </div>
+      <div class="arch-arrow">→</div>
+      <div class="arch-step">
+        <div class="arch-icon">03 · SYNC</div>
+        <div class="arch-title" data-en="CRM auto-sync" data-ru="CRM автосинхронизация">CRM auto-sync</div>
+        <div class="arch-desc" data-en="Card, fields, status — no manual data transfer" data-ru="Карточка, поля, статус — без ручного переноса данных">Card, fields, status — no manual data transfer</div>
+      </div>
+      <div class="arch-arrow">→</div>
+      <div class="arch-step">
+        <div class="arch-icon">04 · ACTION</div>
+        <div class="arch-title" data-en="Tasks & notifications" data-ru="Задачи и уведомления">Tasks & notifications</div>
+        <div class="arch-desc" data-en="Manager gets a ready-made task, not a raw lead" data-ru="Менеджер получает готовую задачу, а не сырой лид">Manager gets a ready-made task, not a raw lead</div>
+      </div>
+      <div class="arch-arrow">→</div>
+      <div class="arch-step">
+        <div class="arch-icon">05 · REPORT</div>
+        <div class="arch-title" data-en="Dashboard & reporting" data-ru="Дашборд и отчётность">Dashboard & reporting</div>
+        <div class="arch-desc" data-en="Metrics and money visible in real time, no Excel" data-ru="Метрики и деньги видно в реальном времени, без Excel">Metrics and money visible in real time, no Excel</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="footer-note" data-en="DEMO — DATA IS ILLUSTRATIVE · SINAPS OPERATIONS PLATFORM" data-ru="DEMO — ДАННЫЕ ИЛЛЮСТРАТИВНЫЕ · SINAPS OPERATIONS PLATFORM">DEMO — DATA IS ILLUSTRATIVE · SINAPS OPERATIONS PLATFORM</div>
+</div>
+
+<script>
+  function setLang(lang){
+    document.documentElement.lang = lang;
+    document.getElementById('btn-en').classList.toggle('active', lang === 'en');
+    document.getElementById('btn-ru').classList.toggle('active', lang === 'ru');
+
+    document.querySelectorAll('[data-en]').forEach(el => {
+      const val = lang === 'ru' ? el.getAttribute('data-ru') : el.getAttribute('data-en');
+      if (val !== null) el.textContent = val;
+    });
+
+    document.querySelectorAll('[data-en-list]').forEach(el => {
+      const list = (lang === 'ru' ? el.getAttribute('data-ru-list') : el.getAttribute('data-en-list')).split(',');
+      const spans = el.querySelectorAll('span');
+      spans.forEach((s, i) => { if (list[i]) s.textContent = list[i]; });
+    });
+  }
+  setLang('en');
+</script>
+</body>
+</html>
