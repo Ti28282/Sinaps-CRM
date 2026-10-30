@@ -5,3 +5,4 @@ frontend/dist/*
 frontend/wailsjs
 *.db
 tg-session.json
+.vscode/*
