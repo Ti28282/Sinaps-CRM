@@ -1,0 +1,303 @@
+import { useEffect, useState } from 'react'
+import QRCode from 'qrcode'
+import { api, on, errText } from '../api.js'
+import { Icon, TgIcon, WaIcon } from '../components/ui.jsx'
+
+const STATE_LABEL = {
+  no_keys: ['Нужны ключи', 'chip-muted'],
+  connecting: ['Подключение…', 'chip-muted'],
+  need_phone: ['Ожидает входа', 'chip-muted'],
+  need_code: ['Введите код', 'chip-muted'],
+  need_qr: ['Сканируйте QR', 'chip-muted'],
+  need_password: ['Нужен пароль 2FA', 'chip-muted'],
+  ready: ['Подключён', 'chip-ok'],
+  error: ['Ошибка', 'chip-muted'],
+}
+
+export default function Connect({ tg, settings, reloadSettings, toast, done }) {
+  const [label, cls] = STATE_LABEL[tg.state] || STATE_LABEL.no_keys
+  return (
+    <div className="page">
+      <div className="narrow" style={{ display: 'flex', flexDirection: 'column', gap: 28 }}>
+        <div>
+          <div className="eyebrow" style={{ color: 'var(--accent)' }}>Подключения</div>
+          <h1 style={{ margin: '10px 0 0', fontSize: 34, fontWeight: 600, letterSpacing: '-.02em' }}>Подключите мессенджеры</h1>
+          <p className="hint" style={{ marginTop: 10, maxWidth: 620, fontSize: 15 }}>
+            CRM забирает только чаты из выбранной папки. Личные переписки не трогаются, база хранится у вас на компьютере.
+          </p>
+        </div>
+
+        <div className="grid-2">
+          <section className="panel">
+            <div className="panel-head">
+              <div className="panel-ico" style={{ background: 'var(--tg)' }}><TgIcon size={22} /></div>
+              <div>
+                <h2>Telegram</h2>
+                <div className="hint">Личный аккаунт через MTProto</div>
+              </div>
+              <span className={'chip ' + cls} style={{ marginLeft: 'auto' }}>{label}</span>
+            </div>
+            {tg.state === 'error' && <p className="hint" style={{ color: 'var(--danger)' }}>{tg.error}</p>}
+            <TgFlow tg={tg} settings={settings} reloadSettings={reloadSettings} toast={toast} done={done} />
+          </section>
+
+          <section className="panel soon">
+            <div className="panel-head">
+              <div className="panel-ico" style={{ background: 'var(--wa)' }}><WaIcon size={22} /></div>
+              <div>
+                <h2>WhatsApp</h2>
+                <div className="hint">Вход по QR · следующий этап</div>
+              </div>
+              <span className="chip chip-muted" style={{ marginLeft: 'auto' }}>Скоро</span>
+            </div>
+            <p className="hint">
+              Подключим через whatsmeow (протокол WhatsApp Web). Чаты попадут в ту же воронку и не будут дублироваться.
+              Чтобы не рисковать основным номером, лучше завести отдельный.
+            </p>
+          </section>
+        </div>
+
+        <Settings settings={settings} reloadSettings={reloadSettings} toast={toast} />
+      </div>
+    </div>
+  )
+}
+
+function TgFlow({ tg, settings, reloadSettings, toast, done }) {
+  const [apiId, setApiId] = useState('')
+  const [apiHash, setApiHash] = useState('')
+  const [phone, setPhone] = useState('')
+  const [code, setCode] = useState('')
+  const [pwd, setPwd] = useState('')
+  const [busy, setBusy] = useState(false)
+
+  useEffect(() => { if (settings?.tgApiId) setApiId(String(settings.tgApiId)) }, [settings?.tgApiId])
+
+  const run = async (fn) => {
+    setBusy(true)
+    try { await fn() } catch (e) { toast(errText(e), 'err') } finally { setBusy(false) }
+  }
+
+  if (tg.state === 'no_keys' || tg.state === 'error') {
+    return (
+      <form className="field" style={{ gap: 14 }} onSubmit={(e) => { e.preventDefault(); run(async () => { await api.tgSaveKeys(apiId, apiHash); reloadSettings() }) }}>
+        <p className="hint">
+          Получите ключи на <b>my.telegram.org</b> → API development tools → создайте приложение. Это ваши личные ключи, они остаются на компьютере.
+        </p>
+        <label className="field"><span>API ID</span><input className="input mono" inputMode="numeric" value={apiId} onChange={(e) => setApiId(e.target.value.replace(/\D/g, ''))} /></label>
+        <label className="field"><span>API Hash{settings?.hasApiHash ? ' (сохранён — можно не вводить)' : ''}</span><input className="input mono" value={apiHash} onChange={(e) => setApiHash(e.target.value)} /></label>
+        <button className="btn btn-primary" disabled={busy || !apiId} style={{ alignSelf: 'flex-start' }}>Подключиться <Icon name="arrow" size={16} /></button>
+      </form>
+    )
+  }
+
+  if (tg.state === 'connecting') return <p className="hint">Соединяемся с Telegram…</p>
+
+  if (tg.state === 'need_qr') return <QRLogin tg={tg} />
+
+  if (tg.state === 'need_phone') {
+    return (
+      <div className="field" style={{ gap: 18 }}>
+        {tg.error && <p className="hint" style={{ color: 'var(--danger)' }}>{tg.error}</p>}
+        <div className="field" style={{ gap: 10 }}>
+          <p className="hint">Быстрее всего — по QR: код не нужен, подтверждаете на телефоне.</p>
+          <button type="button" className="btn btn-primary" style={{ alignSelf: 'flex-start' }} disabled={busy} onClick={() => run(api.tgStartQR)}>Войти по QR-коду</button>
+        </div>
+        <form className="field" style={{ gap: 14, paddingTop: 18, borderTop: '1px solid var(--line)' }} onSubmit={(e) => { e.preventDefault(); run(() => api.tgSendCode(phone)) }}>
+          <label className="field"><span>Или по номеру телефона</span><input className="input mono" placeholder="+996 555 123 456" value={phone} onChange={(e) => setPhone(e.target.value)} /></label>
+          <div className="row">
+            <button className="btn" disabled={busy || phone.length < 6}>Получить код</button>
+            <button type="button" className="btn" onClick={() => run(api.tgLogout)}>Сменить ключи</button>
+          </div>
+        </form>
+      </div>
+    )
+  }
+
+  if (tg.state === 'need_code') {
+    return <CodeForm tg={tg} code={code} setCode={setCode} busy={busy} run={run} />
+  }
+
+  if (tg.state === 'need_password') {
+    return (
+      <form className="field" style={{ gap: 14 }} onSubmit={(e) => { e.preventDefault(); run(() => api.tgPassword(pwd)) }}>
+        <label className="field"><span>Облачный пароль (2FA)</span><input className="input" type="password" value={pwd} onChange={(e) => setPwd(e.target.value)} autoFocus /></label>
+        <button className="btn btn-primary" disabled={busy || !pwd} style={{ alignSelf: 'flex-start' }}>Подтвердить</button>
+      </form>
+    )
+  }
+
+  return <Folders tg={tg} settings={settings} reloadSettings={reloadSettings} toast={toast} done={done} />
+}
+
+const VIA = {
+  app: 'в приложение Telegram — чат «Telegram» на другом вашем устройстве (не SMS)',
+  sms: 'по SMS',
+  call: 'звонком — код будет в последних цифрах номера',
+  email: 'на почту, привязанную к аккаунту',
+  fragment: 'через Fragment',
+  firebase: 'по SMS',
+}
+const NEXT = { sms: 'по SMS', call: 'звонком', fragment: 'через Fragment' }
+
+function CodeForm({ tg, code, setCode, busy, run }) {
+  const [left, setLeft] = useState(tg.timeout || 0)
+  useEffect(() => {
+    setLeft(tg.timeout || 0)
+    const t = setInterval(() => setLeft((s) => Math.max(0, s - 1)), 1000)
+    return () => clearInterval(t)
+  }, [tg.timeout, tg.codeVia])
+
+  return (
+    <form className="field" style={{ gap: 14 }} onSubmit={(e) => { e.preventDefault(); run(() => api.tgSignIn(code)) }}>
+      <p className="hint">Код отправлен на {tg.phone} {VIA[tg.codeVia] || ''}.</p>
+      {tg.codeVia === 'app' && (
+        <p className="hint">Если Telegram открыт только на этом номере и нигде больше — код не придёт по SMS сам. Войдите по QR или запросите повторно.</p>
+      )}
+      <label className="field"><span>Код</span><input className="input mono" inputMode="numeric" value={code} onChange={(e) => setCode(e.target.value.replace(/\D/g, ''))} autoFocus /></label>
+      <div className="row">
+        <button className="btn btn-primary" disabled={busy || code.length < 4}>Войти</button>
+        {tg.nextVia && (
+          <button type="button" className="btn" disabled={busy || left > 0} onClick={() => run(api.tgResend)}>
+            {left > 0 ? `Отправить ${NEXT[tg.nextVia]} через ${left} с` : `Отправить ${NEXT[tg.nextVia]}`}
+          </button>
+        )}
+        <button type="button" className="btn" disabled={busy} onClick={() => run(api.tgStartQR)}>Войти по QR</button>
+      </div>
+    </form>
+  )
+}
+
+function QRLogin({ tg }) {
+  const [img, setImg] = useState('')
+  useEffect(() => {
+    if (!tg.qrUrl) return
+    QRCode.toDataURL(tg.qrUrl, { width: 440, margin: 1, color: { dark: '#0D0E11', light: '#ECEDEF' } }).then(setImg)
+  }, [tg.qrUrl])
+
+  return (
+    <div className="row" style={{ gap: 24, alignItems: 'center' }}>
+      <div style={{ width: 220, height: 220, borderRadius: 18, background: '#ECEDEF', padding: 10, flexShrink: 0 }}>
+        {img && <img src={img} alt="QR-код для входа в Telegram" style={{ width: '100%', height: '100%', display: 'block' }} />}
+      </div>
+      <div className="field" style={{ flex: '1 1 200px', gap: 14 }}>
+        <ol style={{ margin: 0, paddingLeft: 18, display: 'flex', flexDirection: 'column', gap: 8, lineHeight: 1.5, color: 'var(--text-2)' }}>
+          <li>Откройте Telegram на телефоне</li>
+          <li>Настройки → Устройства → Подключить устройство</li>
+          <li>Наведите камеру на код</li>
+        </ol>
+        <p className="hint">Код обновляется сам каждые 30 секунд.</p>
+        <button type="button" className="btn" style={{ alignSelf: 'flex-start' }} onClick={() => api.tgCancelQR()}>Отмена</button>
+      </div>
+    </div>
+  )
+}
+
+function Folders({ tg, settings, reloadSettings, toast, done }) {
+  const [folders, setFolders] = useState(null)
+  const [sel, setSel] = useState(settings?.tgFolderId || 0)
+  const [progress, setProgress] = useState(null)
+
+  useEffect(() => {
+    api.tgFolders().then((f) => {
+      setFolders(f)
+      if (!sel) {
+        const guess = f.find((x) => /client|клиент/i.test(x.title))
+        if (guess) setSel(guess.id)
+      }
+    }).catch((e) => toast(errText(e), 'err'))
+    return on('sync:progress', setProgress)
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+
+  async function sync() {
+    const f = folders.find((x) => x.id === sel)
+    setProgress({ done: 0, total: f?.count || 0 })
+    try {
+      const r = await api.syncFolder(sel, f?.title || '')
+      toast(`Готово: ${r.chats} чатов (новых ${r.newChats}), сообщений ${r.newMessages}${r.skipped ? `, пропущено ${r.skipped}` : ''}`)
+      reloadSettings()
+      done()
+    } catch (e) { toast(errText(e), 'err') } finally { setProgress(null) }
+  }
+
+  const picked = folders?.find((x) => x.id === sel)
+
+  return (
+    <>
+      <div className="account">
+        <div className="avatar" style={{ width: 36, height: 36, background: 'var(--accent)', fontSize: 13 }}>{(tg.name || '?')[0]}</div>
+        <div>
+          <div style={{ fontWeight: 600 }}>{tg.username ? '@' + tg.username : tg.name}</div>
+          <div className="hint" style={{ fontSize: 12 }}>Сессия активна на этом компьютере</div>
+        </div>
+        <button type="button" className="btn btn-sm" style={{ marginLeft: 'auto' }} onClick={() => api.tgLogout().catch((e) => toast(errText(e), 'err'))}>Выйти</button>
+      </div>
+
+      <fieldset style={{ margin: 0, padding: 0, border: 0, display: 'flex', flexDirection: 'column', gap: 8 }}>
+        <legend className="eyebrow" style={{ marginBottom: 10 }}>Папка с клиентами</legend>
+        {!folders && <p className="hint">Загружаем папки…</p>}
+        {folders?.length === 0 && <p className="hint">Папок нет. Создайте в Telegram папку «clients» и добавьте туда чаты клиентов.</p>}
+        {folders?.map((f) => (
+          <button key={f.id} type="button" className="option" aria-pressed={f.id === sel} onClick={() => setSel(f.id)}>
+            <span className="radio" aria-hidden="true" />
+            <Icon name="folder" size={16} />
+            <span style={{ fontWeight: 500 }}>{f.title}</span>
+            <span className="mono" style={{ marginLeft: 'auto', fontSize: 12, color: 'var(--muted-2)' }}>{f.hasRules ? 'по правилам' : `${f.count} чатов`}</span>
+          </button>
+        ))}
+      </fieldset>
+
+      {progress && (
+        <div className="field">
+          <span>Импорт: {progress.done} из {progress.total}</span>
+          <div className="progress"><div style={{ width: `${progress.total ? (progress.done / progress.total) * 100 : 0}%` }} /></div>
+        </div>
+      )}
+
+      <button type="button" className="btn btn-primary" disabled={!sel || !!progress} onClick={sync} style={{ alignSelf: 'flex-start' }}>
+        {settings?.tgFolderId === sel ? 'Синхронизировать' : `Импортировать${picked && !picked.hasRules ? ` ${picked.count} чатов` : ''}`}
+        <Icon name="arrow" size={16} />
+      </button>
+    </>
+  )
+}
+
+function Settings({ settings, reloadSettings, toast }) {
+  const [info, setInfo] = useState(null)
+  useEffect(() => { api.info().then(setInfo) }, [])
+  if (!settings) return null
+
+  const save = async (p) => {
+    try { await api.saveSettings(p); reloadSettings() } catch (e) { toast(errText(e), 'err') }
+  }
+
+  return (
+    <section className="panel">
+      <h2>Настройки</h2>
+      <div className="row" style={{ gap: 24, alignItems: 'flex-end' }}>
+        <label className="field" style={{ width: 220 }}>
+          <span>Сообщений истории на чат</span>
+          <select className="input" value={settings.historyLimit} onChange={(e) => save({ historyLimit: Number(e.target.value) })}>
+            {[50, 100, 200, 500, 1000].map((n) => <option key={n} value={n}>{n}</option>)}
+          </select>
+        </label>
+        <label className="field" style={{ width: 220 }}>
+          <span>Лимит рассылки в день</span>
+          <select className="input" value={settings.dailyLimit} onChange={(e) => save({ dailyLimit: Number(e.target.value) })}>
+            {[10, 15, 20, 30, 50].map((n) => <option key={n} value={n}>{n}</option>)}
+          </select>
+        </label>
+        <label className="check" style={{ height: 44 }}>
+          <input type="checkbox" checked={settings.autoSync} onChange={(e) => save({ autoSync: e.target.checked })} />
+          Синхронизировать при запуске
+        </label>
+      </div>
+      {info && (
+        <div className="row" style={{ justifyContent: 'space-between' }}>
+          <p className="hint">База: <span className="mono">{info.dataDir}</span> · версия {info.version}</p>
+          <button type="button" className="btn btn-sm" onClick={() => api.openDataDir()}><Icon name="folder" size={16} /> Открыть папку</button>
+        </div>
+      )}
+    </section>
+  )
+}

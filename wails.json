@@ -1,0 +1,18 @@
+{
+  "$schema": "https://wails.io/schemas/config.v2.json",
+  "name": "sinaps-crm",
+  "outputfilename": "SINAPS-CRM",
+  "frontend:install": "npm install",
+  "frontend:build": "npm run build",
+  "frontend:dev:watcher": "npm run dev",
+  "frontend:dev:serverUrl": "auto",
+  "author": {
+    "name": "Timur",
+    "email": "sabirovt50@gmail.com"
+  },
+  "info": {
+    "companyName": "SINAPS",
+    "productName": "SINAPS CRM",
+    "productVersion": "0.1.0"
+  }
+}
