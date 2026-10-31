@@ -338,3 +338,17 @@ button:disabled { cursor: default; opacity: .5; }
 .col-cards:empty { display: none; }
 .col-search { display: flex; align-items: center; gap: 6px; height: 36px; padding: 0 10px; border-radius: 10px; background: var(--field); border: 1px solid var(--line-field); color: var(--faint); }
 .col-search input { flex: 1; min-width: 0; background: transparent; border: 0; outline: none; color: var(--text); font-size: 13px; }
+
+/* ---------- файлы ---------- */
+.thread { position: relative; }
+.thread.drag-over .thread-body { outline: 2px dashed var(--accent-line); outline-offset: -12px; }
+.drop-hint { position: absolute; inset: 80px 28px 120px; z-index: 5; display: flex; flex-direction: column; gap: 10px; align-items: center; justify-content: center; border-radius: 18px; background: color-mix(in srgb, var(--bg) 82%, transparent); color: var(--text); font-weight: 600; pointer-events: none; }
+.attach { display: flex; align-items: center; gap: 12px; margin: 0 28px; padding: 12px 14px; border-radius: 16px; background: var(--card-2); border: 1px solid var(--line-2); }
+.attach-ico, .file-ico { width: 44px; height: 44px; border-radius: 12px; background: var(--raise); color: var(--muted); display: grid; place-items: center; flex-shrink: 0; }
+.attach-name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.file-card { display: flex; align-items: center; gap: 12px; padding: 4px 6px 4px 0; border: 0; background: transparent; color: inherit; min-width: 220px; max-width: 340px; }
+.bubble.out .file-ico { background: rgba(13,14,17,.12); color: var(--accent-ink); }
+.file-name { display: block; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.file-size { display: block; font-size: 12px; opacity: .7; margin-top: 2px; }
+.file-card:hover .file-name { text-decoration: underline; }
+.bubble:not(.out) .file-ico { background: var(--bg-2); color: var(--accent-text); }

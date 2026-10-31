@@ -11,6 +11,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -127,6 +128,22 @@ type Message struct {
 	MediaKind string `json:"mediaKind"`
 	MediaRef  string `json:"-"`
 	Deleted   bool   `json:"deleted"`
+	FileName  string `json:"fileName,omitempty"`
+	FileSize  int64  `json:"fileSize,omitempty"`
+}
+
+// FillFile достаёт имя и размер файла из media_ref для показа в переписке.
+func (m *Message) FillFile() {
+	if m.MediaKind != "file" || m.MediaRef == "" {
+		return
+	}
+	var r struct {
+		Name  string `json:"name"`
+		Bytes int64  `json:"bytes"`
+	}
+	if json.Unmarshal([]byte(m.MediaRef), &r) == nil {
+		m.FileName, m.FileSize = r.Name, r.Bytes
+	}
 }
 
 type Event struct {
@@ -427,7 +444,7 @@ func (s *Store) AddMessage(ctx context.Context, m Message, live bool) (inserted 
 		// сообщение уже есть: докидываем фото, если раньше его не сохраняли
 		if m.MediaRef != "" {
 			_, err = s.db.ExecContext(ctx, `UPDATE messages SET media_kind=?, media_ref=?,
-  text = CASE WHEN text='[фото]' THEN ? ELSE text END
+  text = CASE WHEN text IN ('[фото]','[файл]') THEN ? ELSE text END
 WHERE chat_id=? AND msg_id=?`, m.MediaKind, m.MediaRef, m.Text, m.ChatID, m.MsgID)
 		}
 		return false, err
@@ -485,6 +502,7 @@ func scanMsg(r interface{ Scan(...any) error }) (Message, error) {
 	var o, d int
 	err := r.Scan(&m.ID, &m.ChatID, &m.MsgID, &o, &m.Text, &m.Date, &m.MediaKind, &m.MediaRef, &d)
 	m.Out, m.Deleted = o == 1, d == 1
+	m.FillFile()
 	return m, err
 }
 
@@ -724,8 +742,11 @@ func previewOf(text, media string) string {
 	if p := preview(text); p != "" {
 		return p
 	}
-	if media == "photo" {
+	switch media {
+	case "photo":
 		return "Фото"
+	case "file":
+		return "Файл"
 	}
 	return ""
 }

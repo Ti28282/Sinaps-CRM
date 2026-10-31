@@ -50,6 +50,10 @@ export const api = {
   deleteChat: (id) => call('DeleteChat', id),
   send: (id, text) => call('SendMessage', id, text),
   deleteMessage: (chatId, msgId) => call('DeleteMessage', chatId, msgId),
+  pickFile: () => call('PickFile'),
+  fileInfo: (path) => call('FileInfo', path),
+  sendFile: (chatId, path, caption, asPhoto) => call('SendFile', chatId, path, caption, asPhoto),
+  openAttachment: (chatId, msgId) => call('OpenAttachment', chatId, msgId),
   stats: () => call('Stats'),
 
   broadcastStatus: () => call('BroadcastStatus'),

@@ -37,6 +37,7 @@ const demoPhoto = 'data:image/svg+xml;utf8,' + encodeURIComponent('<svg xmlns="h
 const fp = chats.find((c) => c.title.startsWith('Фитнес'))
 messages[fp.id].splice(1, 0, { id: 500, chatId: fp.id, msgId: 500, out: false, date: fp.lastAt - 600, text: 'Вот так сейчас выглядит наше расписание', mediaKind: 'photo', mediaUrl: demoPhoto })
 messages[fp.id][0].deleted = false
+messages[fp.id].push({ id: 502, chatId: fp.id, msgId: 502, out: false, date: fp.lastAt + 60, text: '', mediaKind: 'file', fileName: 'Прайс_абонементы_2026.xlsx', fileSize: 48_300 })
 messages[fp.id].splice(1, 0, { id: 501, chatId: fp.id, msgId: 501, out: false, date: fp.lastAt - 1200, text: 'Ой, не туда отправил', deleted: true })
 const events = {}
 let savedTheme = 'dark'
@@ -129,6 +130,18 @@ export const mock = {
     messages[chatId] = messages[chatId].filter((m) => m.msgId !== msgId)
     emit('message:deleted', { chatId, removed: [msgId], marked: [] }); emit('chats:changed')
   },
+  PickFile: async () => (Math.random() > 0.5 ? '/home/timur/Документы/КП SINAPS.pdf' : '/home/timur/Изображения/скрин.png'),
+  FileInfo: async (path) => { const name = path.split('/').pop(); return { path, name, size: name.endsWith('.pdf') ? 2_450_000 : 830_000, isImage: /\.(png|jpe?g|webp)$/i.test(name), tooBig: false } },
+  SendFile: async (chatId, path, caption, asPhoto) => {
+    const total = 2_000_000
+    for (let d = 0; d <= total; d += 400_000) { emit('upload:progress', { chatId, done: d, total }); await wait(200) }
+    const name = path.split('/').pop()
+    const m = asPhoto
+      ? { id: ++nextMsg, chatId, msgId: nextMsg, out: true, text: caption, date: Math.floor(Date.now() / 1000), mediaKind: 'photo', mediaUrl: demoPhoto }
+      : { id: ++nextMsg, chatId, msgId: nextMsg, out: true, text: caption, date: Math.floor(Date.now() / 1000), mediaKind: 'file', fileName: name, fileSize: 2_450_000 }
+    messages[chatId].push(m); emit('message:new', m); emit('chats:changed')
+  },
+  OpenAttachment: async () => { await wait(600) },
   Stats: async () => {
     const s = { total: chats.length, unread: 0, pipeline: 0, won: 0, byStage: {}, byChannel: { tg: chats.length } }
     chats.forEach((c) => { s.byStage[c.stage] = (s.byStage[c.stage] || 0) + 1; if (c.unread) s.unread++; if (c.stage === 'deal') s.won++; if (!['deal', 'lost'].includes(c.stage)) s.pipeline += c.amount })

@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"mime"
 	"os"
 	"path/filepath"
 	goruntime "runtime"
@@ -23,6 +24,7 @@ import (
 	"github.com/gotd/td/telegram/downloader"
 	"github.com/gotd/td/telegram/query"
 	"github.com/gotd/td/telegram/query/dialogs"
+	"github.com/gotd/td/telegram/uploader"
 	"github.com/gotd/td/tg"
 	"github.com/gotd/td/tgerr"
 
@@ -824,7 +826,7 @@ func (c *Client) Send(ctx context.Context, chat store.Chat, text string) error {
 	if err != nil {
 		return humanErr(err)
 	}
-	id, date := sentID(upd)
+	id, date, _ := sentID(upd)
 	if id == 0 {
 		return nil // сообщение ушло; подтянется при следующей синхронизации
 	}
@@ -832,12 +834,92 @@ func (c *Client) Send(ctx context.Context, chat store.Chat, text string) error {
 	return nil
 }
 
-func sentID(u tg.UpdatesClass) (int, int) {
+// MaxUpload — лимит на отправляемый файл.
+const MaxUpload = 1536 << 20 // 1,5 ГБ
+
+// SendFile загружает файл в Telegram и отправляет его в чат.
+// asPhoto=true — как фото (Telegram сожмёт), иначе документом.
+func (c *Client) SendFile(ctx context.Context, chat store.Chat, path, caption string, asPhoto bool, progress func(done, total int64)) error {
+	api, err := c.apiClient()
+	if err != nil {
+		return err
+	}
+	st, err := os.Stat(path)
+	if err != nil {
+		return fmt.Errorf("файл не найден: %w", err)
+	}
+	if st.IsDir() {
+		return errors.New("папки отправлять нельзя — выберите файл")
+	}
+	if st.Size() > MaxUpload {
+		return fmt.Errorf("файл больше 1,5 ГБ (%.1f ГБ)", float64(st.Size())/(1<<30))
+	}
+	if st.Size() == 0 {
+		return errors.New("файл пустой")
+	}
+	peer, err := inputPeer(chat)
+	if err != nil {
+		return err
+	}
+
+	up := uploader.NewUploader(api).WithProgress(uploadProgress(progress))
+	file, err := up.FromPath(ctx, path)
+	if err != nil {
+		return humanErr(err)
+	}
+	name := filepath.Base(path)
+	var media tg.InputMediaClass
+	if asPhoto {
+		media = &tg.InputMediaUploadedPhoto{File: file}
+	} else {
+		mt := mime.TypeByExtension(strings.ToLower(filepath.Ext(name)))
+		if mt == "" {
+			mt = "application/octet-stream"
+		}
+		media = &tg.InputMediaUploadedDocument{
+			File: file, MimeType: mt, ForceFile: true,
+			Attributes: []tg.DocumentAttributeClass{&tg.DocumentAttributeFilename{FileName: name}},
+		}
+	}
+	upd, err := api.MessagesSendMedia(ctx, &tg.MessagesSendMediaRequest{
+		Peer: peer, Media: media, Message: strings.TrimSpace(caption), RandomID: randomID(),
+	})
+	if err != nil {
+		if asPhoto && tgerr.Is(err, "PHOTO_INVALID_DIMENSIONS", "PHOTO_EXT_INVALID", "IMAGE_PROCESS_FAILED", "PHOTO_SAVE_FILE_INVALID") {
+			return errors.New("Telegram не принял это фото — отправьте его без сжатия (файлом)")
+		}
+		return humanErr(err)
+	}
+	if _, _, m := sentID(upd); m != nil {
+		c.store(ctx, chat.ID, m, false)
+	}
+	return nil
+}
+
+type uploadProgress func(done, total int64)
+
+func (p uploadProgress) Chunk(ctx context.Context, s uploader.ProgressState) error {
+	if p != nil {
+		p(s.Uploaded, s.Total)
+	}
+	return nil
+}
+
+// IsImage — можно ли отправить файл как фото.
+func IsImage(path string) bool {
+	switch strings.ToLower(filepath.Ext(path)) {
+	case ".jpg", ".jpeg", ".png", ".webp":
+		return true
+	}
+	return false
+}
+
+func sentID(u tg.UpdatesClass) (int, int, *tg.Message) {
 	now := int(time.Now().Unix())
 	var list []tg.UpdateClass
 	switch v := u.(type) {
 	case *tg.UpdateShortSentMessage:
-		return v.ID, v.Date
+		return v.ID, v.Date, nil
 	case *tg.Updates:
 		list = v.Updates
 	case *tg.UpdatesCombined:
@@ -850,17 +932,17 @@ func sentID(u tg.UpdatesClass) (int, int) {
 		switch v := x.(type) {
 		case *tg.UpdateNewMessage:
 			if m, ok := v.Message.(*tg.Message); ok {
-				return m.ID, m.Date
+				return m.ID, m.Date, m
 			}
 		case *tg.UpdateNewChannelMessage:
 			if m, ok := v.Message.(*tg.Message); ok {
-				return m.ID, m.Date
+				return m.ID, m.Date, m
 			}
 		case *tg.UpdateMessageID:
 			id = v.ID
 		}
 	}
-	return id, now
+	return id, now, nil
 }
 
 // ---------- peers ----------
@@ -964,9 +1046,8 @@ func (p *peer) resolveTitle(ctx context.Context, api *tg.Client) {
 
 func toStore(chatID int64, m *tg.Message) store.Message {
 	msg := store.Message{ChatID: chatID, MsgID: int64(m.ID), Out: m.Out, Text: msgText(m), Date: int64(m.Date)}
-	if ref, ok := photoRef(m); ok {
-		msg.MediaKind, msg.MediaRef = "photo", ref
-	}
+	msg.MediaKind, msg.MediaRef = mediaOf(m)
+	msg.FillFile()
 	return msg
 }
 
@@ -978,7 +1059,10 @@ func msgText(m *tg.Message) string {
 	case *tg.MessageMediaPhoto:
 		return "" // фото показываем картинкой
 	case *tg.MessageMediaDocument:
-		return "[файл]"
+		if _, ok := docRef(m); ok {
+			return "" // файл показываем карточкой
+		}
+		return "[стикер]"
 	case *tg.MessageMediaGeo, *tg.MessageMediaGeoLive, *tg.MessageMediaVenue:
 		return "[геолокация]"
 	case *tg.MessageMediaContact:
@@ -1087,10 +1171,68 @@ func (c *Client) DeleteMessage(ctx context.Context, chat store.Chat, msgID int64
 // ---------- фото ----------
 
 type mediaRef struct {
-	ID   int64  `json:"id"`
-	Hash int64  `json:"hash"`
-	Ref  []byte `json:"ref"`
-	Size string `json:"size"`
+	ID    int64  `json:"id"`
+	Hash  int64  `json:"hash"`
+	Ref   []byte `json:"ref"`
+	Size  string `json:"size,omitempty"`  // фото: тип размера
+	Name  string `json:"name,omitempty"`  // файл: имя
+	Mime  string `json:"mime,omitempty"`  // файл: MIME
+	Bytes int64  `json:"bytes,omitempty"` // файл: размер
+}
+
+// docRef — ссылка на файл (документ, видео, голосовое). Стикеры пропускаем.
+func docRef(m *tg.Message) (string, bool) {
+	md, ok := m.Media.(*tg.MessageMediaDocument)
+	if !ok {
+		return "", false
+	}
+	d, ok := md.Document.(*tg.Document)
+	if !ok {
+		return "", false
+	}
+	name := ""
+	for _, a := range d.Attributes {
+		switch v := a.(type) {
+		case *tg.DocumentAttributeSticker:
+			return "", false
+		case *tg.DocumentAttributeFilename:
+			name = v.FileName
+		}
+	}
+	if name == "" {
+		name = fmt.Sprintf("file_%d%s", d.ID, extByMime(d.MimeType))
+	}
+	b, _ := json.Marshal(mediaRef{ID: d.ID, Hash: d.AccessHash, Ref: d.FileReference, Name: name, Mime: d.MimeType, Bytes: d.Size})
+	return string(b), true
+}
+
+func extByMime(mime string) string {
+	switch mime {
+	case "video/mp4":
+		return ".mp4"
+	case "audio/ogg":
+		return ".ogg"
+	case "audio/mpeg":
+		return ".mp3"
+	case "application/pdf":
+		return ".pdf"
+	case "image/jpeg":
+		return ".jpg"
+	case "image/png":
+		return ".png"
+	}
+	return ""
+}
+
+// mediaOf — тип и ссылка вложения сообщения.
+func mediaOf(m *tg.Message) (kind, ref string) {
+	if r, ok := photoRef(m); ok {
+		return "photo", r
+	}
+	if r, ok := docRef(m); ok {
+		return "file", r
+	}
+	return "", ""
 }
 
 func photoRef(m *tg.Message) (string, bool) {
@@ -1131,9 +1273,9 @@ func biggestSize(sizes []tg.PhotoSizeClass) string {
 	return best
 }
 
-// DownloadPhoto скачивает фото сообщения в path. Если ссылка на файл устарела —
+// DownloadMedia скачивает фото или файл сообщения в path. Если ссылка на файл устарела —
 // перезапрашивает сообщение у Telegram и пробует ещё раз.
-func (c *Client) DownloadPhoto(ctx context.Context, chat store.Chat, m store.Message, path string) error {
+func (c *Client) DownloadMedia(ctx context.Context, chat store.Chat, m store.Message, path string) error {
 	api, err := c.apiClient()
 	if err != nil {
 		return err
@@ -1142,15 +1284,17 @@ func (c *Client) DownloadPhoto(ctx context.Context, chat store.Chat, m store.Mes
 	for attempt := 0; attempt < 2; attempt++ {
 		var r mediaRef
 		if err := json.Unmarshal([]byte(ref), &r); err != nil || r.ID == 0 {
-			return errors.New("у сообщения нет фото")
+			return errors.New("у сообщения нет вложения")
+		}
+		var loc tg.InputFileLocationClass = &tg.InputPhotoFileLocation{ID: r.ID, AccessHash: r.Hash, FileReference: r.Ref, ThumbSize: r.Size}
+		if m.MediaKind == "file" {
+			loc = &tg.InputDocumentFileLocation{ID: r.ID, AccessHash: r.Hash, FileReference: r.Ref}
 		}
 		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 			return err
 		}
 		tmp := path + ".part"
-		_, err = downloader.NewDownloader().Download(api, &tg.InputPhotoFileLocation{
-			ID: r.ID, AccessHash: r.Hash, FileReference: r.Ref, ThumbSize: r.Size,
-		}).ToPath(ctx, tmp)
+		_, err = downloader.NewDownloader().Download(api, loc).ToPath(ctx, tmp)
 		if err == nil {
 			return os.Rename(tmp, path)
 		}
@@ -1162,9 +1306,9 @@ func (c *Client) DownloadPhoto(ctx context.Context, chat store.Chat, m store.Mes
 		if ferr != nil {
 			return ferr
 		}
-		newRef, ok := photoRef(fresh)
-		if !ok {
-			return errors.New("фото больше недоступно в Telegram")
+		kind, newRef := mediaOf(fresh)
+		if kind != m.MediaKind || newRef == "" {
+			return errors.New("вложение больше недоступно в Telegram")
 		}
 		ref = newRef
 		_ = c.st.SetMediaRef(ctx, m.ID, ref)

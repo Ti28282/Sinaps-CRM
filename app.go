@@ -67,6 +67,13 @@ func (a *App) startup(ctx context.Context) {
 		a.cfg, _ = config.Load(os.TempDir()) // крайний случай: настройки не сохранятся между запусками
 	}
 	a.applyWindowTheme(a.cfg.Get().Theme)
+
+	// файлы, перетащенные в окно, — фронт откроет их в окне отправки
+	runtime.OnFileDrop(ctx, func(x, y int, paths []string) {
+		if len(paths) > 0 {
+			runtime.EventsEmit(ctx, "files:dropped", paths)
+		}
+	})
 	a.startPlugins()
 
 	// ключи уже сохранены — подключаемся сразу
@@ -123,15 +130,18 @@ type Info struct {
 
 func (a *App) GetInfo() Info { return Info{Version: version, DataDir: a.dataDir} }
 
-func (a *App) OpenDataDir() error {
+func (a *App) OpenDataDir() error { return openPath(a.dataDir) }
+
+// openPath открывает файл или папку программой по умолчанию.
+func openPath(p string) error {
 	var cmd *exec.Cmd
 	switch goruntime.GOOS {
 	case "windows":
-		cmd = exec.Command("explorer", a.dataDir)
+		cmd = exec.Command("rundll32", "url.dll,FileProtocolHandler", p)
 	case "darwin":
-		cmd = exec.Command("open", a.dataDir)
+		cmd = exec.Command("open", p)
 	default:
-		cmd = exec.Command("xdg-open", a.dataDir)
+		cmd = exec.Command("xdg-open", p)
 	}
 	return cmd.Start()
 }
@@ -387,7 +397,7 @@ func (a *App) mediaHandler() http.Handler {
 			}
 			ctx, cancel := context.WithTimeout(a.ctx, 60*time.Second)
 			defer cancel()
-			if err := a.tg.DownloadPhoto(ctx, c, m, path); err != nil {
+			if err := a.tg.DownloadMedia(ctx, c, m, path); err != nil {
 				http.Error(w, err.Error(), http.StatusBadGateway)
 				return
 			}
@@ -653,4 +663,93 @@ func (a *App) stopPlugins() {
 			_ = p.Stop()
 		}
 	}
+}
+
+// ---------- файлы ----------
+
+type FileInfo struct {
+	Path    string `json:"path"`
+	Name    string `json:"name"`
+	Size    int64  `json:"size"`
+	IsImage bool   `json:"isImage"`
+	TooBig  bool   `json:"tooBig"`
+}
+
+func (a *App) FileInfo(path string) (FileInfo, error) {
+	st, err := os.Stat(path)
+	if err != nil {
+		return FileInfo{}, err
+	}
+	if st.IsDir() {
+		return FileInfo{}, errors.New("это папка — выберите файл")
+	}
+	return FileInfo{Path: path, Name: filepath.Base(path), Size: st.Size(),
+		IsImage: telegram.IsImage(path), TooBig: st.Size() > telegram.MaxUpload}, nil
+}
+
+// PickFile — системный диалог выбора файла (скрепка). Пустая строка — отмена.
+func (a *App) PickFile() (string, error) {
+	return runtime.OpenFileDialog(a.ctx, runtime.OpenDialogOptions{Title: "Отправить файл"})
+}
+
+// SendFile отправляет файл в чат. Прогресс — событие upload:progress.
+func (a *App) SendFile(chatID int64, path, caption string, asPhoto bool) error {
+	c, err := a.st.Chat(a.ctx, chatID)
+	if err != nil {
+		return err
+	}
+	last := time.Time{}
+	err = a.tg.SendFile(a.ctx, c, path, caption, asPhoto, func(done, total int64) {
+		if time.Since(last) > 150*time.Millisecond || done == total {
+			last = time.Now()
+			runtime.EventsEmit(a.ctx, "upload:progress", map[string]any{"chatId": chatID, "done": done, "total": total})
+		}
+	})
+	if err != nil {
+		return err
+	}
+	_ = a.st.LogSend(a.ctx, chatID, "reply")
+	_ = a.st.MarkRead(a.ctx, chatID)
+	if c.Stage == "new" {
+		s := "sent"
+		_ = a.st.PatchChat(a.ctx, chatID, store.ChatPatch{Stage: &s})
+	}
+	a.emit("chats:changed", nil)
+	return nil
+}
+
+// OpenAttachment скачивает файл из сообщения (один раз) и открывает его.
+func (a *App) OpenAttachment(chatID, msgID int64) error {
+	m, err := a.st.MessageByMsg(a.ctx, chatID, msgID)
+	if err != nil || m.MediaKind != "file" {
+		return errors.New("в сообщении нет файла")
+	}
+	c, err := a.st.Chat(a.ctx, chatID)
+	if err != nil {
+		return err
+	}
+	name := safeName(m.FileName)
+	path := filepath.Join(a.dataDir, "media", strconv.FormatInt(chatID, 10), fmt.Sprintf("%d_%s", msgID, name))
+	if _, err := os.Stat(path); err != nil {
+		ctx, cancel := context.WithTimeout(a.ctx, 30*time.Minute)
+		defer cancel()
+		if err := a.tg.DownloadMedia(ctx, c, m, path); err != nil {
+			return err
+		}
+	}
+	return openPath(path)
+}
+
+func safeName(n string) string {
+	n = filepath.Base(strings.TrimSpace(n))
+	n = strings.Map(func(r rune) rune {
+		if strings.ContainsRune(`<>:"/\|?*`, r) || r < 32 {
+			return '_'
+		}
+		return r
+	}, n)
+	if n == "" || n == "." || n == ".." {
+		n = "file"
+	}
+	return n
 }

@@ -52,6 +52,10 @@ function Thread({ id, toast, tg, onDeleted }) {
   const [text, setText] = useState('')
   const [sending, setSending] = useState(false)
   const [photo, setPhoto] = useState(null)
+  const [attach, setAttach] = useState(null) // { path, name, size, isImage, tooBig }
+  const [noCompress, setNoCompress] = useState(false)
+  const [upload, setUpload] = useState(null) // { done, total }
+  const [dragOver, setDragOver] = useState(false)
   const body = useRef(null)
 
   const load = () => api.chat(id).then(setView).catch((e) => toast(errText(e), 'err'))
@@ -75,7 +79,9 @@ function Thread({ id, toast, tg, onDeleted }) {
       })
     })
     const off2 = on('chats:changed', () => api.chat(id).then((v) => setView((cur) => (cur ? { ...cur, chat: v.chat, events: v.events } : v))).catch(() => {}))
-    return () => { off1 && off1(); off2 && off2(); off3 && off3() }
+    const off4 = on('files:dropped', (paths) => { setDragOver(false); pickPath(paths[0], paths.length) })
+    const off5 = on('upload:progress', (p) => p.chatId === id && setUpload({ done: p.done, total: p.total }))
+    return () => { off1 && off1(); off2 && off2(); off3 && off3(); off4 && off4(); off5 && off5() }
   }, [id]) // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
@@ -85,8 +91,30 @@ function Thread({ id, toast, tg, onDeleted }) {
   if (!view) return <div className="empty">Загрузка…</div>
   const c = view.chat
 
+  async function pickPath(path, count = 1) {
+    if (!path) return
+    if (count > 1) toast('Пока можно отправить один файл за раз — взят первый')
+    try {
+      const info = await api.fileInfo(path)
+      if (info.tooBig) return toast(`«${info.name}» больше 1,5 ГБ (${fmtSize(info.size)})`, 'err')
+      setAttach(info); setNoCompress(false)
+    } catch (e) { toast(errText(e), 'err') }
+  }
+
+  async function chooseFile() {
+    try { pickPath(await api.pickFile()) } catch (e) { toast(errText(e), 'err') }
+  }
+
   async function send() {
     const t = text.trim()
+    if (attach) {
+      setSending(true); setUpload({ done: 0, total: attach.size })
+      try {
+        await api.sendFile(id, attach.path, t, attach.isImage && !noCompress)
+        setAttach(null); setText(''); load()
+      } catch (e) { toast(errText(e), 'err') } finally { setSending(false); setUpload(null) }
+      return
+    }
     if (!t) return
     setSending(true)
     try { await api.send(id, t); setText(''); load() } catch (e) { toast(errText(e), 'err') } finally { setSending(false) }
@@ -109,7 +137,12 @@ function Thread({ id, toast, tg, onDeleted }) {
   let lastDay = ''
   return (
     <>
-      <section className="thread">
+      <section className={'thread' + (dragOver ? ' drag-over' : '')} style={{ '--wails-drop-target': 'drop' }}
+        onDragEnter={(e) => { e.preventDefault(); if (tg.state === 'ready') setDragOver(true) }}
+        onDragOver={(e) => e.preventDefault()}
+        onDragLeave={(e) => { if (!e.currentTarget.contains(e.relatedTarget)) setDragOver(false) }}
+        onDrop={(e) => { e.preventDefault(); setDragOver(false) }}>
+        {dragOver && <div className="drop-hint"><Icon name="clip" size={28} /> Отпустите, чтобы отправить файл</div>}
         <header className="thread-head">
           <Avatar chat={c} size={44} />
           <div style={{ minWidth: 0 }}>
@@ -132,6 +165,7 @@ function Thread({ id, toast, tg, onDeleted }) {
                 {showDay && <div className="day">{d}</div>}
                 <div className={'bubble' + (m.out ? ' out' : '') + (m.deleted ? ' deleted' : '') + (m.mediaKind === 'photo' ? ' has-photo' : '')}>
                   {m.mediaKind === 'photo' && <Photo m={m} open={setPhoto} />}
+                  {m.mediaKind === 'file' && <FileCard m={m} toast={toast} />}
                   {m.text && <div className="bubble-text">{m.text}</div>}
                   <div className="time">
                     {m.deleted && <span className="deleted-tag">удалено клиентом · </span>}
@@ -154,14 +188,43 @@ function Thread({ id, toast, tg, onDeleted }) {
           </button>
         )}
 
+        {attach && (
+          <div className="attach">
+            <div className="attach-ico"><Icon name={attach.isImage ? 'image' : 'file'} size={22} /></div>
+            <div style={{ minWidth: 0, flex: 1 }}>
+              <div className="attach-name">{attach.name}</div>
+              <div className="hint" style={{ fontSize: 12 }}>
+                {fmtSize(attach.size)}{attach.isImage ? (noCompress ? ' · уйдёт файлом без сжатия' : ' · уйдёт как фото (со сжатием)') : ' · уйдёт файлом'}
+              </div>
+              {upload && (
+                <div className="progress" style={{ marginTop: 8 }}>
+                  <div style={{ width: `${upload.total ? (upload.done / upload.total) * 100 : 0}%` }} />
+                </div>
+              )}
+            </div>
+            {attach.isImage && !sending && (
+              <label className="check" style={{ fontSize: 13 }}>
+                <input type="checkbox" checked={noCompress} onChange={(e) => setNoCompress(e.target.checked)} />
+                Без сжатия
+              </label>
+            )}
+            {!sending && <button type="button" className="icon-btn" aria-label="Убрать файл" onClick={() => setAttach(null)}><Icon name="close" /></button>}
+            {upload && <span className="mono hint" style={{ fontSize: 12 }}>{upload.total ? Math.round((upload.done / upload.total) * 100) : 0}%</span>}
+          </div>
+        )}
+
         <div className="composer">
+          <button type="button" className="icon-btn" style={{ height: 52, width: 52, borderRadius: 14, flexShrink: 0 }}
+            aria-label="Прикрепить файл" title="Прикрепить файл (до 1,5 ГБ)" onClick={chooseFile} disabled={sending || tg.state !== 'ready'}>
+            <Icon name="clip" size={20} />
+          </button>
           <label style={{ flex: 1 }} className="field">
-            <span>{tg.state === 'ready' ? 'Ответ уйдёт в Telegram · Ctrl+Enter — отправить' : 'Telegram не подключён'}</span>
-            <textarea className="textarea" rows={2} placeholder="Написать сообщение…" value={text}
+            <span>{tg.state === 'ready' ? (attach ? 'Подпись к файлу · Ctrl+Enter — отправить' : 'Ответ уйдёт в Telegram · Ctrl+Enter — отправить · файл можно перетащить') : 'Telegram не подключён'}</span>
+            <textarea className="textarea" rows={2} placeholder={attach ? 'Подпись (необязательно)…' : 'Написать сообщение…'} value={text}
               onChange={(e) => setText(e.target.value)}
               onKeyDown={(e) => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); send() } }} />
           </label>
-          <button type="button" className="send-btn" aria-label="Отправить" onClick={send} disabled={sending || !text.trim() || tg.state !== 'ready'}>
+          <button type="button" className="send-btn" aria-label="Отправить" onClick={send} disabled={sending || (!text.trim() && !attach) || tg.state !== 'ready'}>
             <Icon name="arrow" size={20} />
           </button>
         </div>
@@ -169,6 +232,30 @@ function Thread({ id, toast, tg, onDeleted }) {
 
       <ClientCard key={c.id + ':' + c.stage} chat={c} events={view.events} patch={patch} />
     </>
+  )
+}
+
+export function fmtSize(n) {
+  if (!n) return '0 Б'
+  const u = ['Б', 'КБ', 'МБ', 'ГБ']
+  const i = Math.min(u.length - 1, Math.floor(Math.log(n) / Math.log(1024)))
+  return (n / 1024 ** i).toLocaleString('ru-RU', { maximumFractionDigits: i ? 1 : 0 }) + ' ' + u[i]
+}
+
+function FileCard({ m, toast }) {
+  const [busy, setBusy] = useState(false)
+  async function open() {
+    setBusy(true)
+    try { await api.openAttachment(m.chatId, m.msgId) } catch (e) { toast(errText(e), 'err') } finally { setBusy(false) }
+  }
+  return (
+    <button type="button" className="file-card" onClick={open} disabled={busy} title="Скачать и открыть">
+      <span className="file-ico"><Icon name="file" size={20} /></span>
+      <span style={{ minWidth: 0, textAlign: 'left' }}>
+        <span className="file-name">{m.fileName || 'Файл'}</span>
+        <span className="file-size">{busy ? 'Скачиваем…' : fmtSize(m.fileSize)}</span>
+      </span>
+    </button>
   )
 }
 
