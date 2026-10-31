@@ -105,7 +105,7 @@ export default function Broadcast({ chats, settings, reloadSettings, tg, toast }
               ))}
             </div>
           )}
-          {count > left && st && <p className="hint" style={{ color: '#F5B65C' }}>Сегодня можно ещё {left}. Остальным отправим завтра.</p>}
+          {count > left && st && <p className="hint" style={{ color: 'var(--warn-text)' }}>Сегодня можно ещё {left}. Остальным отправим завтра.</p>}
           <button type="button" className="btn btn-primary" style={{ alignSelf: 'flex-start' }}
             disabled={running || !count || !left || !tpl.trim() || tg.state !== 'ready'} onClick={start}>
             <Icon name="send" size={16} /> Отправить {Math.min(count, left)}

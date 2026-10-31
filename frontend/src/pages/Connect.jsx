@@ -20,7 +20,7 @@ export default function Connect({ tg, settings, reloadSettings, toast, done }) {
     <div className="page">
       <div className="narrow" style={{ display: 'flex', flexDirection: 'column', gap: 28 }}>
         <div>
-          <div className="eyebrow" style={{ color: 'var(--accent)' }}>Подключения</div>
+          <div className="eyebrow" style={{ color: 'var(--accent-text)' }}>Подключения</div>
           <h1 style={{ margin: '10px 0 0', fontSize: 34, fontWeight: 600, letterSpacing: '-.02em' }}>Подключите мессенджеры</h1>
           <p className="hint" style={{ marginTop: 10, maxWidth: 620, fontSize: 15 }}>
             CRM забирает только чаты из выбранной папки. Личные переписки не трогаются, база хранится у вас на компьютере.
@@ -57,7 +57,6 @@ export default function Connect({ tg, settings, reloadSettings, toast, done }) {
           </section>
         </div>
 
-        <Settings settings={settings} reloadSettings={reloadSettings} toast={toast} />
       </div>
     </div>
   )
@@ -259,45 +258,5 @@ function Folders({ tg, settings, reloadSettings, toast, done }) {
         <Icon name="arrow" size={16} />
       </button>
     </>
-  )
-}
-
-function Settings({ settings, reloadSettings, toast }) {
-  const [info, setInfo] = useState(null)
-  useEffect(() => { api.info().then(setInfo) }, [])
-  if (!settings) return null
-
-  const save = async (p) => {
-    try { await api.saveSettings(p); reloadSettings() } catch (e) { toast(errText(e), 'err') }
-  }
-
-  return (
-    <section className="panel">
-      <h2>Настройки</h2>
-      <div className="row" style={{ gap: 24, alignItems: 'flex-end' }}>
-        <label className="field" style={{ width: 220 }}>
-          <span>Сообщений истории на чат</span>
-          <select className="input" value={settings.historyLimit} onChange={(e) => save({ historyLimit: Number(e.target.value) })}>
-            {[50, 100, 200, 500, 1000].map((n) => <option key={n} value={n}>{n}</option>)}
-          </select>
-        </label>
-        <label className="field" style={{ width: 220 }}>
-          <span>Лимит рассылки в день</span>
-          <select className="input" value={settings.dailyLimit} onChange={(e) => save({ dailyLimit: Number(e.target.value) })}>
-            {[10, 15, 20, 30, 50].map((n) => <option key={n} value={n}>{n}</option>)}
-          </select>
-        </label>
-        <label className="check" style={{ height: 44 }}>
-          <input type="checkbox" checked={settings.autoSync} onChange={(e) => save({ autoSync: e.target.checked })} />
-          Синхронизировать при запуске
-        </label>
-      </div>
-      {info && (
-        <div className="row" style={{ justifyContent: 'space-between' }}>
-          <p className="hint">База: <span className="mono">{info.dataDir}</span> · версия {info.version}</p>
-          <button type="button" className="btn btn-sm" onClick={() => api.openDataDir()}><Icon name="folder" size={16} /> Открыть папку</button>
-        </div>
-      )}
-    </section>
   )
 }

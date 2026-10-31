@@ -29,7 +29,7 @@ cd frontend && npm i && npm run dev
 2. Откройте «Подключения», введите ключи, номер, код и пароль 2FA, если он включён.
 3. Выберите папку (по умолчанию ищется «clients») и нажмите «Импортировать».
 
-Данные лежат в `%AppData%\SINAPS-CRM\` (`crm.db` и `tg-session.json`). Файл сессии = доступ к аккаунту, не передавайте его никому.
+Данные лежат в `%AppData%\SINAPS-CRM\` на Windows и `~/.config/SINAPS-CRM/` на Linux: `crm.db`, `tg-session.json` и `config.json` (тема и плагины). Файл сессии = доступ к аккаунту, не передавайте его никому.
 
 ## Почему нет дублей
 
@@ -60,6 +60,8 @@ main.go                     Wails: окно, embed frontend/dist
 app.go                      методы для фронта + рассылки
 internal/store/             SQLite: схема, upsert, тест на дубли
 internal/telegram/          вход, папки, история, обновления, отправка
+internal/config/            config.json: тема, настройки плагинов
+internal/plugins/           интерфейс и реестр плагинов (пока пустой)
 frontend/src/api.js         мост window.go.main.App + демо-режим (mock.js)
 frontend/src/pages/         Pipeline, Chats, Broadcast, Connect
 ```

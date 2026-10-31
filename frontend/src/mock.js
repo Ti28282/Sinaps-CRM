@@ -39,6 +39,9 @@ messages[fp.id].splice(1, 0, { id: 500, chatId: fp.id, msgId: 500, out: false, d
 messages[fp.id][0].deleted = false
 messages[fp.id].splice(1, 0, { id: 501, chatId: fp.id, msgId: 501, out: false, date: fp.lastAt - 1200, text: 'Ой, не туда отправил', deleted: true })
 const events = {}
+let savedTheme = 'dark'
+try { savedTheme = localStorage.getItem('sinaps-theme') || 'dark' } catch {}
+const appConfig = { theme: savedTheme, plugins: {} }
 
 const find = (id) => chats.find((c) => c.id === id)
 const wait = (ms = 250) => new Promise((r) => setTimeout(r, ms))
@@ -53,6 +56,11 @@ export const mock = {
   GetSettings: async () => ({ ...settings }),
   SaveSettings: async (p) => { Object.assign(settings, Object.fromEntries(Object.entries(p).filter(([, v]) => v != null))) },
 
+  GetConfig: async () => ({ ...appConfig }),
+  SetTheme: async (theme) => { appConfig.theme = theme === 'light' ? 'light' : 'dark'; try { localStorage.setItem('sinaps-theme', appConfig.theme) } catch {} ; return { ...appConfig } },
+  ListPlugins: async () => [],
+  SetPluginEnabled: async () => { throw new Error('плагин не найден') },
+  SavePluginSettings: async () => {},
   TgStatus: async () => status,
   TgSaveKeys: async (id) => { settings.tgApiId = id; settings.hasApiHash = true; setStatus({ state: 'connecting' }); await wait(600); setStatus({ state: 'need_phone' }) },
   TgSendCode: async (phone) => { await wait(); setStatus({ state: 'need_code', phone, codeVia: 'app', nextVia: 'sms', timeout: 30 }) },

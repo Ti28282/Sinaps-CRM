@@ -17,6 +17,8 @@ import (
 
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 
+	"sinaps-crm/internal/config"
+	"sinaps-crm/internal/plugins"
 	"sinaps-crm/internal/store"
 	"sinaps-crm/internal/telegram"
 )
@@ -30,6 +32,7 @@ type App struct {
 	dataDir string
 	st      *store.Store
 	tg      *telegram.Client
+	cfg     *config.Store
 
 	autoOnce sync.Once
 
@@ -60,6 +63,12 @@ func (a *App) startup(ctx context.Context) {
 	}
 	a.tg = telegram.New(a.st, a.dataDir, a.emit)
 
+	if a.cfg, err = config.Load(a.dataDir); err != nil {
+		a.cfg, _ = config.Load(os.TempDir()) // крайний случай: настройки не сохранятся между запусками
+	}
+	a.applyWindowTheme(a.cfg.Get().Theme)
+	a.startPlugins()
+
 	// ключи уже сохранены — подключаемся сразу
 	if id, _ := strconv.Atoi(a.st.Get(ctx, "tg_api_id")); id != 0 {
 		_ = a.tg.Start(id, a.st.Get(ctx, "tg_api_hash"))
@@ -68,6 +77,7 @@ func (a *App) startup(ctx context.Context) {
 
 func (a *App) shutdown(ctx context.Context) {
 	a.StopBroadcast()
+	a.stopPlugins()
 	if a.tg != nil {
 		a.tg.Stop()
 	}
@@ -526,4 +536,98 @@ func clamp(v, lo, hi int) int {
 		return hi
 	}
 	return v
+}
+
+// ---------- настройки приложения (config.json) ----------
+
+func (a *App) GetConfig() config.Config { return a.cfg.Get() }
+
+func (a *App) SetTheme(theme string) (config.Config, error) {
+	c, err := a.cfg.Update(func(c *config.Config) { c.Theme = theme })
+	a.applyWindowTheme(c.Theme)
+	return c, err
+}
+
+// applyWindowTheme красит фон окна под тему, чтобы не мигало при загрузке.
+func (a *App) applyWindowTheme(theme string) {
+	if theme == config.ThemeLight {
+		runtime.WindowSetBackgroundColour(a.ctx, 245, 246, 248, 255)
+		runtime.WindowSetLightTheme(a.ctx)
+		return
+	}
+	runtime.WindowSetBackgroundColour(a.ctx, 13, 14, 17, 255)
+	runtime.WindowSetDarkTheme(a.ctx)
+}
+
+// ---------- плагины (заготовка) ----------
+
+type PluginView struct {
+	plugins.Info
+	Enabled  bool           `json:"enabled"`
+	Settings map[string]any `json:"settings"`
+}
+
+func (a *App) ListPlugins() []PluginView {
+	cfg := a.cfg.Get()
+	out := []PluginView{}
+	for _, info := range plugins.List() {
+		pc := cfg.Plugins[info.ID]
+		if pc.Settings == nil {
+			pc.Settings = map[string]any{}
+		}
+		out = append(out, PluginView{Info: info, Enabled: pc.Enabled, Settings: pc.Settings})
+	}
+	return out
+}
+
+func (a *App) SetPluginEnabled(id string, enabled bool) error {
+	p, ok := plugins.Get(id)
+	if !ok {
+		return fmt.Errorf("плагин %q не найден", id)
+	}
+	cfg, err := a.cfg.Update(func(c *config.Config) {
+		pc := c.Plugins[id]
+		pc.Enabled = enabled
+		c.Plugins[id] = pc
+	})
+	if err != nil {
+		return err
+	}
+	if enabled {
+		return p.Start(a.ctx, cfg.Plugins[id].Settings)
+	}
+	return p.Stop()
+}
+
+func (a *App) SavePluginSettings(id string, settings map[string]any) error {
+	if _, ok := plugins.Get(id); !ok {
+		return fmt.Errorf("плагин %q не найден", id)
+	}
+	_, err := a.cfg.Update(func(c *config.Config) {
+		pc := c.Plugins[id]
+		pc.Settings = settings
+		c.Plugins[id] = pc
+	})
+	return err
+}
+
+func (a *App) startPlugins() {
+	for id, pc := range a.cfg.Get().Plugins {
+		if p, ok := plugins.Get(id); ok && pc.Enabled {
+			if err := p.Start(a.ctx, pc.Settings); err != nil {
+				a.emit("sync:warn", fmt.Sprintf("Плагин %s не запустился: %v", p.Info().Name, err))
+			}
+		}
+	}
+}
+
+func (a *App) stopPlugins() {
+	if a.cfg == nil {
+		return
+	}
+	for id, pc := range a.cfg.Get().Plugins {
+		if p, ok := plugins.Get(id); ok && pc.Enabled {
+			_ = p.Stop()
+		}
+	}
 }

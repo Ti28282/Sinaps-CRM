@@ -58,7 +58,7 @@ export default function Pipeline({ chats, tg, toast, openChat }) {
 
       <div className="stats">
         <div className="stat"><div className="stat-label">Клиентов в воронке</div><div className="stat-value">{stats.total}</div></div>
-        <div className="stat"><div className="stat-label">Ждут вашего ответа</div><div className="stat-value" style={{ color: 'var(--accent)' }}>{stats.unread}</div></div>
+        <div className="stat"><div className="stat-label">Ждут вашего ответа</div><div className="stat-value" style={{ color: 'var(--accent-text)' }}>{stats.unread}</div></div>
         <div className="stat"><div className="stat-label">Сумма в работе</div><div className="stat-value">{money(stats.pipeline)}</div></div>
         <div className="stat"><div className="stat-label">Закрыто сделок на</div><div className="stat-value">{money(stats.won)}</div></div>
       </div>

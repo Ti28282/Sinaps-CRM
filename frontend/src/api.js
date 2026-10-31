@@ -21,6 +21,11 @@ export const api = {
   openDataDir: () => call('OpenDataDir'),
   settings: () => call('GetSettings'),
   saveSettings: (p) => call('SaveSettings', p),
+  config: () => call('GetConfig'),
+  setTheme: (t) => call('SetTheme', t),
+  plugins: () => call('ListPlugins'),
+  setPluginEnabled: (id, on) => call('SetPluginEnabled', id, on),
+  savePluginSettings: (id, settings) => call('SavePluginSettings', id, settings),
 
   tgStatus: () => call('TgStatus'),
   tgSaveKeys: (id, hash) => call('TgSaveKeys', Number(id) || 0, hash),
@@ -90,4 +95,8 @@ export const avatarColor = (id) => PALETTE[Math.abs(Number(id) || 0) % PALETTE.l
 export function initials(title = '') {
   const w = title.replace(/[«»"']/g, '').split(/\s+/).filter(Boolean)
   return ((w[0]?.[0] || '?') + (w[1]?.[0] || '')).toUpperCase()
+}
+
+export function applyTheme(theme) {
+  document.documentElement.dataset.theme = theme === 'light' ? 'light' : 'dark'
 }

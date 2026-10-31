@@ -5,12 +5,14 @@ import Pipeline from './pages/Pipeline.jsx'
 import Chats from './pages/Chats.jsx'
 import Broadcast from './pages/Broadcast.jsx'
 import Connect from './pages/Connect.jsx'
+import Settings from './pages/Settings.jsx'
 
 const NAV = [
   { id: 'pipeline', label: 'Воронка', icon: 'board' },
   { id: 'chats', label: 'Диалоги', icon: 'chat' },
   { id: 'broadcast', label: 'Рассылки', icon: 'send' },
   { id: 'connect', label: 'Подключения', icon: 'link' },
+  { id: 'settings', label: 'Настройки', icon: 'settings' },
 ]
 
 export default function App() {
@@ -84,7 +86,7 @@ export default function App() {
               </div>
             </div>
             <span className="dot" role="img" aria-label={tg.state === 'ready' ? 'Подключён' : 'Не подключён'}
-              style={{ background: tg.state === 'ready' ? 'var(--accent)' : '#4A4F58' }} />
+              style={{ background: tg.state === 'ready' ? 'var(--accent)' : 'var(--off)' }} />
           </div>
           <div className="source soon">
             <div className="source-ico" style={{ background: 'var(--wa)' }}><WaIcon /></div>
@@ -100,6 +102,7 @@ export default function App() {
         {page === 'pipeline' && <Pipeline chats={chats} tg={tg} toast={toast} openChat={(id) => go('chats', id)} />}
         {page === 'chats' && <Chats chats={chats} openId={openChat} setOpenId={setOpenChat} toast={toast} tg={tg} />}
         {page === 'broadcast' && <Broadcast chats={chats} settings={settings} reloadSettings={reloadSettings} tg={tg} toast={toast} />}
+        {page === 'settings' && <Settings settings={settings} reloadSettings={reloadSettings} toast={toast} />}
         {page === 'connect' && <Connect tg={tg} settings={settings} reloadSettings={reloadSettings} toast={toast} done={() => go('pipeline')} />}
       </main>
 
