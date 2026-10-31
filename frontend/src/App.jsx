@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { api, on, isDemo, errText } from './api.js'
-import { Icon, TgIcon, WaIcon } from './components/ui.jsx'
+import { Icon, MailIcon, TgIcon, WaIcon } from './components/ui.jsx'
 import Pipeline from './pages/Pipeline.jsx'
 import Chats from './pages/Chats.jsx'
 import Broadcast from './pages/Broadcast.jsx'
@@ -100,6 +100,13 @@ export default function App() {
             <div className="source-ico" style={{ background: 'var(--wa)' }}><WaIcon /></div>
             <div>
               <div className="source-name">WhatsApp</div>
+              <div className="source-sub">Скоро</div>
+            </div>
+          </div>
+          <div className="source soon">
+            <div className="source-ico" style={{ background: 'var(--mail)' }}><MailIcon /></div>
+            <div>
+              <div className="source-name">Gmail</div>
               <div className="source-sub">Скоро</div>
             </div>
           </div>

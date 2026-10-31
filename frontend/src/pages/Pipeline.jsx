@@ -114,7 +114,7 @@ export default function Pipeline({ chats, tg, toast, openChat }) {
 
       <div className="row" style={{ justifyContent: 'space-between' }}>
         <div className="seg" role="group" aria-label="Канал">
-          {[['all', 'Все каналы'], ['tg', 'Telegram'], ['wa', 'WhatsApp']].map(([id, label]) => (
+          {[['all', 'Все каналы'], ['tg', 'Telegram'], ['wa', 'WhatsApp'], ['mail', 'Gmail']].map(([id, label]) => (
             <button key={id} type="button" aria-pressed={channel === id} onClick={() => setChannel(id)}>{label}</button>
           ))}
         </div>

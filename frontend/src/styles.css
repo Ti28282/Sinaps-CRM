@@ -17,6 +17,7 @@
   --accent-ink: #0D0E11;
   --tg: #2B8FD6;
   --wa: #1F9D5C;
+  --mail: #D2453A;
   --danger: #F2766B;
   --field: #16181D;
   --col: #121318;
@@ -357,3 +358,5 @@ button:disabled { cursor: default; opacity: .5; }
 .card { touch-action: none; user-select: none; }
 body.dragging-card, body.dragging-card * { cursor: grabbing !important; user-select: none; }
 .drag-ghost { position: fixed; z-index: 80; pointer-events: none; max-width: 260px; padding: 10px 14px; border-radius: 12px; background: var(--card-2); border: 1px solid var(--accent-line); box-shadow: 0 12px 30px var(--shadow); font-weight: 600; font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.chip-mail { background: rgba(210,69,58,.15); color: #F29A92; }
+:root[data-theme="light"] .chip-mail { background: #FCE6E4; color: #A5281F; }

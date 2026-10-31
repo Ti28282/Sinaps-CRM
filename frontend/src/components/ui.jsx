@@ -46,8 +46,12 @@ export function Avatar({ chat, size = 34 }) {
   )
 }
 
+export function MailIcon({ size = 15 }) {
+  return <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2" /><path d="m3 7 9 6 9-6" /></svg>
+}
+
 export function ChannelChip({ channel }) {
-  return channel === 'wa'
-    ? <span className="chip chip-wa">WhatsApp</span>
-    : <span className="chip chip-tg">Telegram</span>
+  if (channel === 'wa') return <span className="chip chip-wa">WhatsApp</span>
+  if (channel === 'mail') return <span className="chip chip-mail">Gmail</span>
+  return <span className="chip chip-tg">Telegram</span>
 }

@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import QRCode from 'qrcode'
 import { api, on, errText } from '../api.js'
-import { Icon, TgIcon, WaIcon } from '../components/ui.jsx'
+import { Icon, MailIcon, TgIcon, WaIcon } from '../components/ui.jsx'
 
 const STATE_LABEL = {
   no_keys: ['Нужны ключи', 'chip-muted'],
@@ -21,7 +21,7 @@ export default function Connect({ tg, settings, reloadSettings, toast, done }) {
       <div className="narrow" style={{ display: 'flex', flexDirection: 'column', gap: 28 }}>
         <div>
           <div className="eyebrow" style={{ color: 'var(--accent-text)' }}>Подключения</div>
-          <h1 style={{ margin: '10px 0 0', fontSize: 34, fontWeight: 600, letterSpacing: '-.02em' }}>Подключите мессенджеры</h1>
+          <h1 style={{ margin: '10px 0 0', fontSize: 34, fontWeight: 600, letterSpacing: '-.02em' }}>Подключите каналы связи</h1>
           <p className="hint" style={{ marginTop: 10, maxWidth: 620, fontSize: 15 }}>
             CRM забирает только чаты из выбранной папки. Личные переписки не трогаются, база хранится у вас на компьютере.
           </p>
@@ -53,6 +53,20 @@ export default function Connect({ tg, settings, reloadSettings, toast, done }) {
             <p className="hint">
               Подключим через whatsmeow (протокол WhatsApp Web). Чаты попадут в ту же воронку и не будут дублироваться.
               Чтобы не рисковать основным номером, лучше завести отдельный.
+            </p>
+          </section>
+
+          <section className="panel soon">
+            <div className="panel-head">
+              <div className="panel-ico" style={{ background: 'var(--mail)' }}><MailIcon size={22} /></div>
+              <div>
+                <h2>Gmail</h2>
+                <div className="hint">Вход через Google · скоро</div>
+              </div>
+              <span className="chip chip-muted" style={{ marginLeft: 'auto' }}>Скоро</span>
+            </div>
+            <p className="hint">
+              Письма от клиентов (по ярлыку, например «clients») появятся в той же воронке рядом с чатами, ответы — прямо из CRM.
             </p>
           </section>
         </div>
