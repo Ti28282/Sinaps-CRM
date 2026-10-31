@@ -41,6 +41,7 @@ messages[fp.id].splice(1, 0, { id: 501, chatId: fp.id, msgId: 501, out: false, d
 const events = {}
 let savedTheme = 'dark'
 try { savedTheme = localStorage.getItem('sinaps-theme') || 'dark' } catch {}
+const hiddenExt = new Set()
 const appConfig = { theme: savedTheme, plugins: {} }
 
 const find = (id) => chats.find((c) => c.id === id)
@@ -86,10 +87,16 @@ export const mock = {
   },
   FolderChats: async (id) => {
     await wait(300)
-    if (id === 2) return chats.map((c) => ({ extId: c.extId, title: c.title, byRule: false }))
+    if (id === 2) return [...chats.map((c) => ({ extId: c.extId, title: c.title, byRule: false, inCrm: true, hidden: false })),
+      ...[...hiddenExt].map((e) => ({ extId: e, title: 'Скрытый чат ' + e, byRule: false, inCrm: false, hidden: true }))]
     return Array.from({ length: id === 4 ? 17 : 23 }, (_, i) => ({ extId: 'x' + id + '_' + i, title: (id === 4 ? 'Контакт ' : 'Чат ') + (i + 1), byRule: id === 4 }))
   },
-  RemoveFromFolder: async (id, ids, alsoCRM) => { await wait(400); return { removed: ids.length, folderDeleted: false, removedFromCrm: alsoCRM ? ids.length : 0 } },
+  HideChats: async (m) => {
+    await wait(300); let n = 0
+    Object.keys(m).forEach((e) => { hiddenExt.add(e); const i = chats.findIndex((c) => c.extId === e); if (i >= 0) { chats.splice(i, 1); n++ } })
+    emit('chats:changed'); return n
+  },
+  UnhideChats: async (ids) => { ids.forEach((e) => hiddenExt.delete(e)) },
   Resync: async () => mock.SyncFolder(settings.tgFolderId || 2, settings.tgFolderName || 'clients'),
 
   ListChats: async (channel, search) => {

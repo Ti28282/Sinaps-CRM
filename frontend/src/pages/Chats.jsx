@@ -102,7 +102,7 @@ function Thread({ id, toast, tg, onDeleted }) {
   }
 
   async function remove() {
-    if (!window.confirm(`Удалить «${c.title}» из CRM? Переписка в Telegram останется.`)) return
+    if (!window.confirm(`Убрать «${c.title}» из CRM? В Telegram ничего не изменится, при синхронизации чат не вернётся (вернуть можно в «Подключениях»).`)) return
     try { await api.deleteChat(id); onDeleted() } catch (e) { toast(errText(e), 'err') }
   }
 

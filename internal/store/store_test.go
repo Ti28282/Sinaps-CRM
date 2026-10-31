@@ -112,3 +112,27 @@ func TestRemoteDelete(t *testing.T) {
 		t.Fatalf("%+v", m)
 	}
 }
+
+func TestHideChats(t *testing.T) {
+	ctx := context.Background()
+	s, err := Open(filepath.Join(t.TempDir(), "crm.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	id, _, _ := s.UpsertChat(ctx, Chat{Channel: "tg", ExtID: "u1", Kind: "user", PeerID: 1, Title: "А"})
+	_, _ = s.AddMessage(ctx, Message{ChatID: id, MsgID: 1, Text: "x", Date: 1}, false)
+	n, err := s.HideChats(ctx, "tg", map[string]string{"u1": "А", "u2": "Б"})
+	if err != nil || n != 1 {
+		t.Fatal(err, n)
+	}
+	if h := s.HiddenSet(ctx, "tg"); !h["u1"] || !h["u2"] {
+		t.Fatal(h)
+	}
+	if list, _ := s.Chats(ctx, "tg", ""); len(list) != 0 {
+		t.Fatal("chat not removed")
+	}
+	_ = s.UnhideChats(ctx, "tg", []string{"u1"})
+	if h := s.HiddenSet(ctx, "tg"); h["u1"] || !h["u2"] {
+		t.Fatal(h)
+	}
+}

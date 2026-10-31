@@ -245,30 +245,17 @@ func (a *App) FolderChats(folderID int) ([]telegram.FolderChat, error) {
 	return a.tg.FolderChats(a.ctx, folderID)
 }
 
-type FolderCleanResult struct {
-	telegram.RemoveResult
-	RemovedFromCRM int `json:"removedFromCrm"`
+// HideChats убирает выбранные чаты только из CRM. Папка в Telegram НЕ меняется;
+// при синхронизации скрытые чаты пропускаются.
+func (a *App) HideChats(chats map[string]string) (int, error) {
+	n, err := a.st.HideChats(a.ctx, "tg", chats)
+	a.emit("chats:changed", nil)
+	return n, err
 }
 
-// RemoveFromFolder убирает выбранные чаты из папки Telegram одним запросом;
-// alsoCRM — заодно удалить их из CRM.
-func (a *App) RemoveFromFolder(folderID int, extIDs []string, alsoCRM bool) (FolderCleanResult, error) {
-	r, err := a.tg.RemoveFromFolder(a.ctx, folderID, extIDs)
-	if err != nil {
-		return FolderCleanResult{}, err
-	}
-	out := FolderCleanResult{RemoveResult: r}
-	if alsoCRM {
-		out.RemovedFromCRM, _ = a.st.DeleteChatsByExt(a.ctx, "tg", extIDs)
-		a.emit("chats:changed", nil)
-	}
-	if r.FolderDeleted {
-		if fid, _ := strconv.Atoi(a.st.Get(a.ctx, "tg_folder_id")); fid == folderID {
-			_ = a.st.Set(a.ctx, "tg_folder_id", "0")
-			_ = a.st.Set(a.ctx, "tg_folder_name", "")
-		}
-	}
-	return out, nil
+// UnhideChats — вернуть скрытые чаты; подтянутся при следующей синхронизации.
+func (a *App) UnhideChats(extIDs []string) error {
+	return a.st.UnhideChats(a.ctx, "tg", extIDs)
 }
 
 func (a *App) Resync() (telegram.SyncResult, error) {
@@ -320,8 +307,14 @@ func (a *App) MarkRead(id int64) error {
 	return nil
 }
 
+// DeleteChat убирает чат из CRM и запоминает его как скрытый,
+// чтобы синхронизация не вернула. Telegram не трогается.
 func (a *App) DeleteChat(id int64) error {
-	if err := a.st.DeleteChat(a.ctx, id); err != nil {
+	c, err := a.st.Chat(a.ctx, id)
+	if err != nil {
+		return err
+	}
+	if _, err := a.st.HideChats(a.ctx, c.Channel, map[string]string{c.ExtID: c.Title}); err != nil {
 		return err
 	}
 	a.emit("chats:changed", nil)

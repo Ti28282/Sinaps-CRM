@@ -68,6 +68,7 @@ type SyncResult struct {
 	NewChats    int `json:"newChats"`
 	NewMessages int `json:"newMessages"`
 	Skipped     int `json:"skipped"`
+	Hidden      int `json:"hidden"`
 }
 
 type Client struct {
@@ -551,9 +552,11 @@ type FolderChat struct {
 	ExtID  string `json:"extId"`
 	Title  string `json:"title"`
 	ByRule bool   `json:"byRule"`
+	InCRM  bool   `json:"inCrm"`
+	Hidden bool   `json:"hidden"` // скрыт в CRM — при синхронизации пропускается
 }
 
-// FolderChats — все чаты папки с названиями (для окна «Убрать из папки»).
+// FolderChats — все чаты папки с названиями (только чтение, папка в Telegram не меняется).
 func (c *Client) FolderChats(ctx context.Context, folderID int) ([]FolderChat, error) {
 	api, err := c.apiClient()
 	if err != nil {
@@ -563,78 +566,13 @@ func (c *Client) FolderChats(ctx context.Context, folderID int) ([]FolderChat, e
 	if err != nil {
 		return nil, err
 	}
+	hidden := c.st.HiddenSet(ctx, "tg")
 	out := make([]FolderChat, 0, len(members))
 	for _, m := range members {
-		out = append(out, FolderChat{ExtID: m.key, Title: m.title, ByRule: m.byRule})
+		_, err := c.st.ChatByExt(ctx, "tg", m.key)
+		out = append(out, FolderChat{ExtID: m.key, Title: m.title, ByRule: m.byRule, InCRM: err == nil, Hidden: hidden[m.key]})
 	}
 	return out, nil
-}
-
-type RemoveResult struct {
-	Removed       int  `json:"removed"`
-	FolderDeleted bool `json:"folderDeleted"`
-}
-
-// RemoveFromFolder убирает чаты из папки в самом Telegram одним запросом.
-// Вручную добавленные удаляются из списка папки, попавшие по правилу —
-// добавляются в исключения. Сами чаты и переписка не удаляются.
-// Если папка остаётся совсем пустой, Telegram её не хранит — папка удаляется.
-func (c *Client) RemoveFromFolder(ctx context.Context, folderID int, extIDs []string) (RemoveResult, error) {
-	var res RemoveResult
-	api, err := c.apiClient()
-	if err != nil {
-		return res, err
-	}
-	members, raw, err := c.folderMembers(ctx, api, folderID)
-	if err != nil {
-		return res, err
-	}
-	drop := map[string]bool{}
-	for _, id := range extIDs {
-		drop[id] = true
-	}
-	keep := func(list []tg.InputPeerClass) []tg.InputPeerClass {
-		out := make([]tg.InputPeerClass, 0, len(list))
-		for _, p := range list {
-			if r, ok := peerRef(p); ok && drop[r.ExtID] {
-				res.Removed++
-				continue
-			}
-			out = append(out, p)
-		}
-		return out
-	}
-
-	var empty bool
-	switch f := raw.(type) {
-	case *tg.DialogFilter:
-		f.PinnedPeers = keep(f.PinnedPeers)
-		f.IncludePeers = keep(f.IncludePeers)
-		for _, m := range members {
-			if m.byRule && drop[m.key] {
-				f.ExcludePeers = append(f.ExcludePeers, m.peer)
-				res.Removed++
-			}
-		}
-		empty = len(f.PinnedPeers)+len(f.IncludePeers) == 0 && !(f.Contacts || f.NonContacts || f.Groups || f.Broadcasts || f.Bots)
-	case *tg.DialogFilterChatlist:
-		f.PinnedPeers = keep(f.PinnedPeers)
-		f.IncludePeers = keep(f.IncludePeers)
-		empty = len(f.PinnedPeers)+len(f.IncludePeers) == 0
-	default:
-		return res, errors.New("эту папку нельзя изменить")
-	}
-
-	req := &tg.MessagesUpdateDialogFilterRequest{ID: folderID}
-	if empty {
-		res.FolderDeleted = true // без Filter запрос удаляет папку
-	} else {
-		req.Filter = raw
-	}
-	if _, err := api.MessagesUpdateDialogFilter(ctx, req); err != nil {
-		return RemoveResult{}, humanErr(err)
-	}
-	return res, nil
 }
 
 type folderRules struct {
@@ -725,10 +663,15 @@ func (c *Client) Sync(ctx context.Context, folderID, limit int) (SyncResult, err
 		limit = 200
 	}
 
+	hidden := c.st.HiddenSet(ctx, "tg")
 	for i, p := range peers {
 		ref, ok := peerRef(p)
 		if !ok {
 			res.Skipped++
+			continue
+		}
+		if hidden[ref.ExtID] {
+			res.Hidden++ // скрыт пользователем в CRM — не импортируем
 			continue
 		}
 		c.emit("sync:progress", map[string]any{"done": i, "total": len(peers)})
@@ -1085,8 +1028,6 @@ func humanErr(err error) error {
 		return errors.New("неверный API ID / API Hash")
 	case tgerr.Is(err, "PEER_FLOOD"):
 		return errors.New("Telegram ограничил отправку (PEER_FLOOD) — сделайте паузу на сутки")
-	case tgerr.Is(err, "FILTER_INCLUDE_TOO_MUCH", "FILTER_EXCLUDE_TOO_MUCH"):
-		return errors.New("Telegram ограничивает число исключений в папке. Для папки с правилами проще выключить само правило («Контакты», «Группы»…) в настройках папки")
 	case tgerr.Is(err, "USER_PRIVACY_RESTRICTED"):
 		return errors.New("пользователь запретил писать ему")
 	}

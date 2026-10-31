@@ -40,7 +40,8 @@ export const api = {
   syncFolder: (id, name) => call('SyncFolder', id, name),
   resync: () => call('Resync'),
   folderChats: (folderId) => call('FolderChats', folderId),
-  removeFromFolder: (folderId, extIds, alsoCRM) => call('RemoveFromFolder', folderId, extIds, alsoCRM),
+  hideChats: (chats) => call('HideChats', chats),
+  unhideChats: (extIds) => call('UnhideChats', extIds),
 
   chats: (channel = 'all', search = '') => call('ListChats', channel, search),
   chat: (id) => call('GetChat', id),

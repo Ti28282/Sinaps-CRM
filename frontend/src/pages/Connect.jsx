@@ -247,8 +247,8 @@ function Folders({ tg, settings, reloadSettings, toast, done }) {
               <span style={{ fontWeight: 500 }}>{f.title}</span>
               <span className="mono" style={{ marginLeft: 'auto', fontSize: 12, color: 'var(--muted-2)' }}>{f.hasRules ? 'по правилам' : `${f.count} чатов`}</span>
             </button>
-            <button type="button" className="icon-btn folder-clean" title="Убрать чаты из папки" aria-label={`Убрать чаты из папки ${f.title}`} onClick={() => setCleaning(f)}>
-              <Icon name="eject" size={18} />
+            <button type="button" className="icon-btn folder-clean" title="Убрать чаты из CRM (Telegram не меняется)" aria-label={`Чаты папки ${f.title} в CRM`} onClick={() => setCleaning(f)}>
+              <Icon name="hide" size={18} />
             </button>
           </div>
         ))}
@@ -268,24 +268,25 @@ function Folders({ tg, settings, reloadSettings, toast, done }) {
 
       {cleaning && (
         <FolderClean folder={cleaning} toast={toast} close={() => setCleaning(null)}
-          onDone={(deleted) => { if (deleted && sel === cleaning.id) setSel(0); loadFolders(); reloadSettings() }} />
+          onDone={() => loadFolders()} />
       )}
     </>
   )
 }
 
 
-// Окно «Убрать из папки»: выбрал чаты — один запрос в Telegram.
+// Окно «Убрать из CRM»: только локально. Папка в Telegram НЕ меняется,
+// скрытые чаты просто не импортируются при синхронизации.
 function FolderClean({ folder, toast, close, onDone }) {
   const [chats, setChats] = useState(null)
-  const [picked, setPicked] = useState(new Set())
+  const [picked, setPicked] = useState(new Set()) // по умолчанию ничего не выбрано
   const [q, setQ] = useState('')
-  const [alsoCRM, setAlsoCRM] = useState(false)
   const [busy, setBusy] = useState(false)
 
+  const load = () => api.folderChats(folder.id).then(setChats).catch((e) => { toast(errText(e), 'err'); close() })
+
   useEffect(() => {
-    api.folderChats(folder.id).then((c) => { setChats(c); setPicked(new Set(c.map((x) => x.extId))) })
-      .catch((e) => { toast(errText(e), 'err'); close() })
+    load()
     const onKey = (e) => e.key === 'Escape' && close()
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
@@ -300,20 +301,26 @@ function FolderClean({ folder, toast, close, onDone }) {
     visible.forEach((c) => (allVisible ? n.delete(c.extId) : n.add(c.extId)))
     return n
   })
-  const everything = chats && picked.size === chats.length && !folder.hasRules
+  const sel = (chats || []).filter((c) => picked.has(c.extId))
+  const toHide = sel.filter((c) => !c.hidden)
+  const toShow = sel.filter((c) => c.hidden)
 
-  async function run() {
-    const ids = [...picked]
-    const msg = everything
-      ? `Убрать все ${ids.length} чатов? Пустая папка «${folder.title}» будет удалена из Telegram. Сами чаты и переписка останутся.`
-      : `Убрать ${ids.length} чатов из папки «${folder.title}»? Сами чаты и переписка в Telegram останутся.`
-    if (!window.confirm(msg)) return
+  async function hide() {
+    if (!window.confirm(`Убрать ${toHide.length} чатов из CRM? Переписка в CRM удалится, при синхронизации они больше не подтянутся. В Telegram и в папке «${folder.title}» ничего не изменится.`)) return
     setBusy(true)
     try {
-      const r = await api.removeFromFolder(folder.id, ids, alsoCRM)
-      toast(`Убрано из папки: ${r.removed}${r.folderDeleted ? ' · папка удалена' : ''}${alsoCRM ? ` · из CRM: ${r.removedFromCrm}` : ''}`)
-      onDone(r.folderDeleted)
-      close()
+      const n = await api.hideChats(Object.fromEntries(toHide.map((c) => [c.extId, c.title])))
+      toast(`Убрано из CRM: ${toHide.length}${n !== toHide.length ? ` (было в CRM: ${n})` : ''}. Папка в Telegram не изменена`)
+      setPicked(new Set()); await load(); onDone()
+    } catch (e) { toast(errText(e), 'err') } finally { setBusy(false) }
+  }
+
+  async function unhide() {
+    setBusy(true)
+    try {
+      await api.unhideChats(toShow.map((c) => c.extId))
+      toast(`Вернули ${toShow.length}. Подтянутся при следующей синхронизации`)
+      setPicked(new Set()); await load(); onDone()
     } catch (e) { toast(errText(e), 'err') } finally { setBusy(false) }
   }
 
@@ -322,8 +329,8 @@ function FolderClean({ folder, toast, close, onDone }) {
       <div className="modal" role="dialog" aria-modal="true" aria-labelledby="fc-title">
         <div className="modal-head">
           <div>
-            <h2 id="fc-title">Убрать из папки «{folder.title}»</h2>
-            <p className="hint" style={{ marginTop: 4 }}>Чаты исчезнут только из папки — переписка в Telegram не удаляется.</p>
+            <h2 id="fc-title">Чаты папки «{folder.title}» в CRM</h2>
+            <p className="hint" style={{ marginTop: 4 }}>Меняется только CRM. Папка и чаты в Telegram остаются как есть.</p>
           </div>
           <button type="button" className="icon-btn" aria-label="Закрыть" onClick={close}><Icon name="close" /></button>
         </div>
@@ -344,30 +351,25 @@ function FolderClean({ folder, toast, close, onDone }) {
 
             <div className="recipients" style={{ maxHeight: 360 }}>
               {visible.map((c) => (
-                <label key={c.extId} className="recipient">
+                <label key={c.extId} className="recipient" style={c.hidden ? { opacity: 0.6 } : undefined}>
                   <input type="checkbox" checked={picked.has(c.extId)} onChange={() => toggle(c.extId)} />
                   <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontWeight: 500 }}>{c.title}</span>
-                  {c.byRule && <span className="chip chip-muted" style={{ marginLeft: 'auto' }}>по правилу</span>}
+                  <span style={{ marginLeft: 'auto' }}>
+                    {c.hidden ? <span className="chip chip-muted">скрыт</span> : c.inCrm ? <span className="chip chip-ok">в CRM</span> : <span className="chip chip-muted">не импортирован</span>}
+                  </span>
                 </label>
               ))}
               {visible.length === 0 && <p className="hint" style={{ padding: 10 }}>{chats.length ? 'Ничего не найдено' : 'В папке нет чатов'}</p>}
             </div>
 
-            {folder.hasRules && [...picked].some((id) => chats.find((c) => c.extId === id)?.byRule) && (
-              <p className="hint">Чаты «по правилу» попадут в исключения папки. Если нужно убрать всех — проще выключить само правило в настройках папки Telegram.</p>
-            )}
-
-            <div className="row" style={{ justifyContent: 'space-between' }}>
-              <label className="check">
-                <input type="checkbox" checked={alsoCRM} onChange={(e) => setAlsoCRM(e.target.checked)} />
-                Удалить их и из CRM
-              </label>
-              <div className="row">
-                <button type="button" className="btn" onClick={close}>Отмена</button>
-                <button type="button" className="btn btn-primary" disabled={busy || picked.size === 0} onClick={run}>
-                  {busy ? 'Убираем…' : `Убрать ${picked.size}`}
-                </button>
-              </div>
+            <div className="row" style={{ justifyContent: 'flex-end' }}>
+              <button type="button" className="btn" onClick={close}>Закрыть</button>
+              {toShow.length > 0 && (
+                <button type="button" className="btn" disabled={busy} onClick={unhide}>Вернуть {toShow.length}</button>
+              )}
+              <button type="button" className="btn btn-primary" disabled={busy || toHide.length === 0} onClick={hide}>
+                {busy ? 'Сохраняем…' : `Убрать из CRM ${toHide.length || ''}`}
+              </button>
             </div>
           </>
         )}

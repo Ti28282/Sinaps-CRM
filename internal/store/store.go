@@ -72,6 +72,16 @@ CREATE TABLE IF NOT EXISTS events(
 );
 CREATE INDEX IF NOT EXISTS idx_events_chat ON events(chat_id, at);
 
+-- чаты, которые пользователь убрал из CRM: синхронизация их пропускает.
+-- В Telegram при этом ничего не меняется.
+CREATE TABLE IF NOT EXISTS hidden_chats(
+  channel TEXT NOT NULL,
+  ext_id  TEXT NOT NULL,
+  title   TEXT NOT NULL DEFAULT '',
+  at      INTEGER NOT NULL,
+  PRIMARY KEY(channel, ext_id)
+);
+
 CREATE TABLE IF NOT EXISTS sends(
   id      INTEGER PRIMARY KEY,
   chat_id INTEGER NOT NULL,
@@ -338,6 +348,47 @@ func (s *Store) PatchChat(ctx context.Context, id int64, p ChatPatch) error {
 func (s *Store) MarkRead(ctx context.Context, id int64) error {
 	_, err := s.db.ExecContext(ctx, `UPDATE chats SET unread=0 WHERE id=?`, id)
 	return err
+}
+
+// HideChats убирает чаты из CRM (вместе с перепиской в базе) и запоминает,
+// чтобы синхронизация их больше не подтягивала. Telegram не трогается.
+func (s *Store) HideChats(ctx context.Context, channel string, chats map[string]string) (int, error) {
+	now := time.Now().Unix()
+	exts := make([]string, 0, len(chats))
+	for ext, title := range chats {
+		if _, err := s.db.ExecContext(ctx, `INSERT INTO hidden_chats(channel,ext_id,title,at) VALUES(?,?,?,?)
+ON CONFLICT(channel,ext_id) DO UPDATE SET title=excluded.title`, channel, ext, title, now); err != nil {
+			return 0, err
+		}
+		exts = append(exts, ext)
+	}
+	return s.DeleteChatsByExt(ctx, channel, exts)
+}
+
+// UnhideChats возвращает чаты: при следующей синхронизации они снова импортируются.
+func (s *Store) UnhideChats(ctx context.Context, channel string, exts []string) error {
+	for _, e := range exts {
+		if _, err := s.db.ExecContext(ctx, `DELETE FROM hidden_chats WHERE channel=? AND ext_id=?`, channel, e); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *Store) HiddenSet(ctx context.Context, channel string) map[string]bool {
+	out := map[string]bool{}
+	rows, err := s.db.QueryContext(ctx, `SELECT ext_id FROM hidden_chats WHERE channel=?`, channel)
+	if err != nil {
+		return out
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var e string
+		if rows.Scan(&e) == nil {
+			out[e] = true
+		}
+	}
+	return out
 }
 
 // DeleteChatsByExt убирает чаты из CRM вместе с перепиской (в Telegram ничего не трогает).
