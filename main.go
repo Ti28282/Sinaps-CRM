@@ -29,8 +29,9 @@ func main() {
 		OnStartup:        app.startup,
 		OnShutdown:       app.shutdown,
 		Bind:             []interface{}{app},
-		// перетаскивание файлов в окно: Wails отдаёт настоящие пути к файлам
-		DragAndDrop: &options.DragAndDrop{EnableFileDrop: true, DisableWebViewDrop: true},
+		// перетаскивание файлов в окно: Wails отдаёт настоящие пути к файлам.
+		// DisableWebViewDrop не включаем — он ломает любое перетаскивание в интерфейсе.
+		DragAndDrop: &options.DragAndDrop{EnableFileDrop: true},
 		// иконка окна и в доке; ProgramName = имя ярлыка sinaps-crm.desktop
 		Linux: &linux.Options{Icon: icon, ProgramName: "sinaps-crm"},
 	})

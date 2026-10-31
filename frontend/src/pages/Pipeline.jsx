@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { api, STAGES, errText, money, when } from '../api.js'
 import { Avatar, ChannelChip, Icon } from '../components/ui.jsx'
 
@@ -7,6 +7,54 @@ export default function Pipeline({ chats, tg, toast, openChat }) {
   const [q, setQ] = useState('')
   const [dragId, setDragId] = useState(null)
   const [over, setOver] = useState(null)
+  const [ghost, setGhost] = useState(null) // { title, x, y }
+  const drag = useRef(null) // { id, title, x0, y0, active }
+  const justDragged = useRef(false)
+  const boardRef = useRef(null)
+
+  // Перетаскивание на указателе (мышь/тачпад), а не на HTML5 drag-and-drop:
+  // так оно работает в любом webview и не конфликтует с перетаскиванием файлов.
+  useEffect(() => {
+    function onMove(e) {
+      const d = drag.current
+      if (!d) return
+      if (!d.active) {
+        if (Math.hypot(e.clientX - d.x0, e.clientY - d.y0) < 6) return
+        d.active = true
+        setDragId(d.id)
+        document.body.classList.add('dragging-card')
+      }
+      setGhost({ title: d.title, x: e.clientX, y: e.clientY })
+      const col = document.elementFromPoint(e.clientX, e.clientY)?.closest('[data-stage]')
+      setOver(col ? col.dataset.stage : null)
+      // автопрокрутка доски у краёв
+      const b = boardRef.current
+      if (b) {
+        const r = b.getBoundingClientRect()
+        if (e.clientX > r.right - 60) b.scrollLeft += 18
+        else if (e.clientX < r.left + 60) b.scrollLeft -= 18
+      }
+    }
+    function onUp(e) {
+      const d = drag.current
+      drag.current = null
+      if (!d || !d.active) return
+      justDragged.current = true
+      setTimeout(() => { justDragged.current = false }, 0)
+      const col = document.elementFromPoint(e.clientX, e.clientY)?.closest('[data-stage]')
+      setDragId(null); setOver(null); setGhost(null)
+      document.body.classList.remove('dragging-card')
+      if (col) move(d.id, col.dataset.stage)
+    }
+    window.addEventListener('pointermove', onMove)
+    window.addEventListener('pointerup', onUp)
+    window.addEventListener('pointercancel', onUp)
+    return () => {
+      window.removeEventListener('pointermove', onMove)
+      window.removeEventListener('pointerup', onUp)
+      window.removeEventListener('pointercancel', onUp)
+    }
+  }) // eslint-disable-line react-hooks/exhaustive-deps
   const [colQ, setColQ] = useState({}) // поиск по названию внутри колонки
   const [syncing, setSyncing] = useState(false)
 
@@ -73,7 +121,8 @@ export default function Pipeline({ chats, tg, toast, openChat }) {
         <div style={{ fontSize: 13, color: 'var(--faint)' }}>Перетащите карточку, чтобы сменить этап</div>
       </div>
 
-      <div className="board">
+      {ghost && <div className="drag-ghost" style={{ left: ghost.x + 12, top: ghost.y + 8 }}>{ghost.title}</div>}
+      <div className="board" ref={boardRef}>
         {STAGES.map((st) => {
           const all = visible.filter((c) => c.stage === st.id)
           const cq = (colQ[st.id] || '').trim().toLowerCase()
@@ -83,9 +132,7 @@ export default function Pipeline({ chats, tg, toast, openChat }) {
             <section
               key={st.id}
               className={'col' + (over === st.id ? ' drop' : '')}
-              onDragOver={(e) => { e.preventDefault(); setOver(st.id) }}
-              onDragLeave={() => setOver((o) => (o === st.id ? null : o))}
-              onDrop={(e) => { e.preventDefault(); setOver(null); move(Number(e.dataTransfer.getData('text/plain')), st.id) }}
+              data-stage={st.id}
             >
               <div className="col-head">
                 <span className="dot" style={{ background: st.color, marginLeft: 0 }} aria-hidden="true" />
@@ -108,10 +155,8 @@ export default function Pipeline({ chats, tg, toast, openChat }) {
                   key={c.id}
                   type="button"
                   className={'card' + (dragId === c.id ? ' dragging' : '')}
-                  draggable
-                  onDragStart={(e) => { setDragId(c.id); e.dataTransfer.setData('text/plain', String(c.id)) }}
-                  onDragEnd={() => setDragId(null)}
-                  onClick={() => openChat(c.id)}
+                  onPointerDown={(e) => { if (e.button === 0) drag.current = { id: c.id, title: c.title, x0: e.clientX, y0: e.clientY, active: false } }}
+                  onClick={() => { if (!justDragged.current) openChat(c.id) }}
                 >
                   <div className="card-top">
                     <Avatar chat={c} />

@@ -33,6 +33,14 @@ export default function App() {
   const reload = useCallback(() => api.chats().then(setChats).catch((e) => toast(errText(e), 'err')), [toast])
   const reloadSettings = useCallback(() => api.settings().then(setSettings), [])
 
+  // файл, брошенный мимо окна диалога, не должен открываться вместо приложения
+  useEffect(() => {
+    const stop = (e) => { if (e.dataTransfer?.types?.includes('Files')) e.preventDefault() }
+    window.addEventListener('dragover', stop)
+    window.addEventListener('drop', stop)
+    return () => { window.removeEventListener('dragover', stop); window.removeEventListener('drop', stop) }
+  }, [])
+
   useEffect(() => {
     reload()
     reloadSettings()

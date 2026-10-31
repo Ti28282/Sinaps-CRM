@@ -352,3 +352,8 @@ button:disabled { cursor: default; opacity: .5; }
 .file-size { display: block; font-size: 12px; opacity: .7; margin-top: 2px; }
 .file-card:hover .file-name { text-decoration: underline; }
 .bubble:not(.out) .file-ico { background: var(--bg-2); color: var(--accent-text); }
+
+/* перетаскивание карточек */
+.card { touch-action: none; user-select: none; }
+body.dragging-card, body.dragging-card * { cursor: grabbing !important; user-select: none; }
+.drag-ghost { position: fixed; z-index: 80; pointer-events: none; max-width: 260px; padding: 10px 14px; border-radius: 12px; background: var(--card-2); border: 1px solid var(--accent-line); box-shadow: 0 12px 30px var(--shadow); font-weight: 600; font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
