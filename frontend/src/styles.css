@@ -332,3 +332,9 @@ button:disabled { cursor: default; opacity: .5; }
 .modal { width: min(620px, 100%); max-height: calc(100vh - 48px); overflow: auto; background: var(--panel); border: 1px solid var(--line-2); border-radius: 22px; padding: 24px; display: flex; flex-direction: column; gap: 16px; box-shadow: 0 20px 60px var(--shadow); }
 .modal h2 { margin: 0; font-size: 19px; font-weight: 600; }
 .modal-head { display: flex; gap: 16px; align-items: flex-start; justify-content: space-between; }
+
+/* колонка: видно ~5 карточек, остальное — скролл внутри */
+.col-cards { display: flex; flex-direction: column; gap: 10px; max-height: 760px; overflow-y: auto; margin-right: -6px; padding-right: 6px; overscroll-behavior: contain; }
+.col-cards:empty { display: none; }
+.col-search { display: flex; align-items: center; gap: 6px; height: 36px; padding: 0 10px; border-radius: 10px; background: var(--field); border: 1px solid var(--line-field); color: var(--faint); }
+.col-search input { flex: 1; min-width: 0; background: transparent; border: 0; outline: none; color: var(--text); font-size: 13px; }

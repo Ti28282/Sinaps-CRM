@@ -7,6 +7,7 @@ export default function Pipeline({ chats, tg, toast, openChat }) {
   const [q, setQ] = useState('')
   const [dragId, setDragId] = useState(null)
   const [over, setOver] = useState(null)
+  const [colQ, setColQ] = useState({}) // поиск по названию внутри колонки
   const [syncing, setSyncing] = useState(false)
 
   const visible = useMemo(() => {
@@ -74,8 +75,10 @@ export default function Pipeline({ chats, tg, toast, openChat }) {
 
       <div className="board">
         {STAGES.map((st) => {
-          const cards = visible.filter((c) => c.stage === st.id)
-          const sum = cards.reduce((s, c) => s + (c.amount || 0), 0)
+          const all = visible.filter((c) => c.stage === st.id)
+          const cq = (colQ[st.id] || '').trim().toLowerCase()
+          const cards = cq ? all.filter((c) => c.title.toLowerCase().includes(cq)) : all
+          const sum = all.reduce((s, c) => s + (c.amount || 0), 0)
           return (
             <section
               key={st.id}
@@ -87,10 +90,19 @@ export default function Pipeline({ chats, tg, toast, openChat }) {
               <div className="col-head">
                 <span className="dot" style={{ background: st.color, marginLeft: 0 }} aria-hidden="true" />
                 <h2>{st.title}</h2>
-                <span className="n">{cards.length}</span>
+                <span className="n">{cq ? `${cards.length}/${all.length}` : all.length}</span>
               </div>
               {sum > 0 && <div className="col-sum">{money(sum)}</div>}
-              {cards.length === 0 && <div className="col-empty">Пусто</div>}
+              {all.length > 0 && (
+                <label className="col-search">
+                  <Icon name="search" size={14} />
+                  <span className="sr">Поиск в колонке {st.title}</span>
+                  <input type="search" placeholder="Найти по названию" value={colQ[st.id] || ''}
+                    onChange={(e) => setColQ((m) => ({ ...m, [st.id]: e.target.value }))} />
+                </label>
+              )}
+              {cards.length === 0 && <div className="col-empty">{cq ? 'Не найдено' : 'Пусто'}</div>}
+              <div className="col-cards">
               {cards.map((c) => (
                 <button
                   key={c.id}
@@ -114,6 +126,7 @@ export default function Pipeline({ chats, tg, toast, openChat }) {
                   </div>
                 </button>
               ))}
+              </div>
             </section>
           )
         })}
