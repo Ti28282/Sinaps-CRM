@@ -446,11 +446,31 @@ func (c *Client) Folders(ctx context.Context) ([]Folder, error) {
 // минус исключения («Без звука», «Прочитанные», «Архив», исключённые чаты).
 // Peer'ы берутся из списка диалогов, поэтому access_hash всегда свежий.
 func (c *Client) folderPeers(ctx context.Context, api *tg.Client, folderID int) ([]tg.InputPeerClass, error) {
+	members, _, err := c.folderMembers(ctx, api, folderID)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]tg.InputPeerClass, 0, len(members))
+	for _, m := range members {
+		out = append(out, m.peer)
+	}
+	return out, nil
+}
+
+type member struct {
+	peer   tg.InputPeerClass
+	key    string
+	title  string
+	byRule bool // попал по правилу папки, а не добавлен вручную
+}
+
+func (c *Client) folderMembers(ctx context.Context, api *tg.Client, folderID int) ([]member, tg.DialogFilterClass, error) {
 	res, err := api.MessagesGetDialogFilters(ctx)
 	if err != nil {
-		return nil, humanErr(err)
+		return nil, nil, humanErr(err)
 	}
 	var f folderRules
+	var raw tg.DialogFilterClass
 	found := false
 	for _, x := range res.Filters {
 		switch v := x.(type) {
@@ -461,22 +481,22 @@ func (c *Client) folderPeers(ctx context.Context, api *tg.Client, folderID int) 
 					contacts: v.Contacts, nonContacts: v.NonContacts, groups: v.Groups, broadcasts: v.Broadcasts, bots: v.Bots,
 					exMuted: v.ExcludeMuted, exRead: v.ExcludeRead, exArchived: v.ExcludeArchived,
 				}
-				found = true
+				found, raw = true, v
 			}
 		case *tg.DialogFilterChatlist:
 			if v.ID == folderID {
 				f = folderRules{include: peerSet(v.PinnedPeers, v.IncludePeers), exclude: map[string]bool{}}
-				found = true
+				found, raw = true, v
 			}
 		}
 	}
 	if !found {
-		return nil, errors.New("папка не найдена — возможно, её переименовали или удалили")
+		return nil, nil, errors.New("папка не найдена — возможно, её переименовали или удалили")
 	}
 
 	now := int(time.Now().Unix())
 	seen := map[string]bool{}
-	var out []tg.InputPeerClass
+	var out []member
 	for _, archive := range []int{0, 1} { // основной список и архив
 		err := query.GetDialogs(api).FolderID(archive).BatchSize(100).ForEach(ctx, func(ctx context.Context, e dialogs.Elem) error {
 			d, ok := e.Dialog.(*tg.Dialog)
@@ -488,17 +508,133 @@ func (c *Client) folderPeers(ctx context.Context, api *tg.Client, folderID int) 
 				return nil
 			}
 			seen[key] = true
-			out = append(out, e.Peer)
+			out = append(out, member{peer: e.Peer, key: key, title: elemTitle(d.Peer, e), byRule: !f.include[key]})
 			return nil
 		})
 		if err != nil {
 			if dur, ok := tgerr.AsFloodWait(err); ok {
-				return nil, fmt.Errorf("Telegram попросил подождать %d с — повторите синхронизацию позже", int(dur.Seconds()))
+				return nil, nil, fmt.Errorf("Telegram попросил подождать %d с — повторите позже", int(dur.Seconds()))
 			}
-			return nil, humanErr(err)
+			return nil, nil, humanErr(err)
 		}
 	}
+	return out, raw, nil
+}
+
+func elemTitle(p tg.PeerClass, e dialogs.Elem) string {
+	switch v := p.(type) {
+	case *tg.PeerUser:
+		if u, ok := e.Entities.User(v.UserID); ok {
+			if t := strings.TrimSpace(u.FirstName + " " + u.LastName); t != "" {
+				return t
+			}
+			if u.Username != "" {
+				return "@" + u.Username
+			}
+			return "+" + u.Phone
+		}
+	case *tg.PeerChat:
+		if ch, ok := e.Entities.Chat(v.ChatID); ok {
+			return ch.Title
+		}
+	case *tg.PeerChannel:
+		if ch, ok := e.Entities.Channel(v.ChannelID); ok {
+			return ch.Title
+		}
+	}
+	return extFromPeer(p)
+}
+
+// ---------- чистка папки ----------
+
+type FolderChat struct {
+	ExtID  string `json:"extId"`
+	Title  string `json:"title"`
+	ByRule bool   `json:"byRule"`
+}
+
+// FolderChats — все чаты папки с названиями (для окна «Убрать из папки»).
+func (c *Client) FolderChats(ctx context.Context, folderID int) ([]FolderChat, error) {
+	api, err := c.apiClient()
+	if err != nil {
+		return nil, err
+	}
+	members, _, err := c.folderMembers(ctx, api, folderID)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]FolderChat, 0, len(members))
+	for _, m := range members {
+		out = append(out, FolderChat{ExtID: m.key, Title: m.title, ByRule: m.byRule})
+	}
 	return out, nil
+}
+
+type RemoveResult struct {
+	Removed       int  `json:"removed"`
+	FolderDeleted bool `json:"folderDeleted"`
+}
+
+// RemoveFromFolder убирает чаты из папки в самом Telegram одним запросом.
+// Вручную добавленные удаляются из списка папки, попавшие по правилу —
+// добавляются в исключения. Сами чаты и переписка не удаляются.
+// Если папка остаётся совсем пустой, Telegram её не хранит — папка удаляется.
+func (c *Client) RemoveFromFolder(ctx context.Context, folderID int, extIDs []string) (RemoveResult, error) {
+	var res RemoveResult
+	api, err := c.apiClient()
+	if err != nil {
+		return res, err
+	}
+	members, raw, err := c.folderMembers(ctx, api, folderID)
+	if err != nil {
+		return res, err
+	}
+	drop := map[string]bool{}
+	for _, id := range extIDs {
+		drop[id] = true
+	}
+	keep := func(list []tg.InputPeerClass) []tg.InputPeerClass {
+		out := make([]tg.InputPeerClass, 0, len(list))
+		for _, p := range list {
+			if r, ok := peerRef(p); ok && drop[r.ExtID] {
+				res.Removed++
+				continue
+			}
+			out = append(out, p)
+		}
+		return out
+	}
+
+	var empty bool
+	switch f := raw.(type) {
+	case *tg.DialogFilter:
+		f.PinnedPeers = keep(f.PinnedPeers)
+		f.IncludePeers = keep(f.IncludePeers)
+		for _, m := range members {
+			if m.byRule && drop[m.key] {
+				f.ExcludePeers = append(f.ExcludePeers, m.peer)
+				res.Removed++
+			}
+		}
+		empty = len(f.PinnedPeers)+len(f.IncludePeers) == 0 && !(f.Contacts || f.NonContacts || f.Groups || f.Broadcasts || f.Bots)
+	case *tg.DialogFilterChatlist:
+		f.PinnedPeers = keep(f.PinnedPeers)
+		f.IncludePeers = keep(f.IncludePeers)
+		empty = len(f.PinnedPeers)+len(f.IncludePeers) == 0
+	default:
+		return res, errors.New("эту папку нельзя изменить")
+	}
+
+	req := &tg.MessagesUpdateDialogFilterRequest{ID: folderID}
+	if empty {
+		res.FolderDeleted = true // без Filter запрос удаляет папку
+	} else {
+		req.Filter = raw
+	}
+	if _, err := api.MessagesUpdateDialogFilter(ctx, req); err != nil {
+		return RemoveResult{}, humanErr(err)
+	}
+	return res, nil
 }
 
 type folderRules struct {
@@ -949,6 +1085,8 @@ func humanErr(err error) error {
 		return errors.New("неверный API ID / API Hash")
 	case tgerr.Is(err, "PEER_FLOOD"):
 		return errors.New("Telegram ограничил отправку (PEER_FLOOD) — сделайте паузу на сутки")
+	case tgerr.Is(err, "FILTER_INCLUDE_TOO_MUCH", "FILTER_EXCLUDE_TOO_MUCH"):
+		return errors.New("Telegram ограничивает число исключений в папке. Для папки с правилами проще выключить само правило («Контакты», «Группы»…) в настройках папки")
 	case tgerr.Is(err, "USER_PRIVACY_RESTRICTED"):
 		return errors.New("пользователь запретил писать ему")
 	}

@@ -39,6 +39,8 @@ export const api = {
   tgFolders: () => call('TgFolders'),
   syncFolder: (id, name) => call('SyncFolder', id, name),
   resync: () => call('Resync'),
+  folderChats: (folderId) => call('FolderChats', folderId),
+  removeFromFolder: (folderId, extIds, alsoCRM) => call('RemoveFromFolder', folderId, extIds, alsoCRM),
 
   chats: (channel = 'all', search = '') => call('ListChats', channel, search),
   chat: (id) => call('GetChat', id),

@@ -340,6 +340,20 @@ func (s *Store) MarkRead(ctx context.Context, id int64) error {
 	return err
 }
 
+// DeleteChatsByExt убирает чаты из CRM вместе с перепиской (в Telegram ничего не трогает).
+func (s *Store) DeleteChatsByExt(ctx context.Context, channel string, extIDs []string) (int, error) {
+	n := 0
+	for _, e := range extIDs {
+		res, err := s.db.ExecContext(ctx, `DELETE FROM chats WHERE channel=? AND ext_id=?`, channel, e)
+		if err != nil {
+			return n, err
+		}
+		k, _ := res.RowsAffected()
+		n += int(k)
+	}
+	return n, nil
+}
+
 func (s *Store) DeleteChat(ctx context.Context, id int64) error {
 	_, err := s.db.ExecContext(ctx, `DELETE FROM chats WHERE id=?`, id)
 	return err

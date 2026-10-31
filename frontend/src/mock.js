@@ -84,6 +84,12 @@ export const mock = {
     emit('chats:changed')
     return { chats: chats.length, newChats: 0, newMessages: 0, skipped: 0 }
   },
+  FolderChats: async (id) => {
+    await wait(300)
+    if (id === 2) return chats.map((c) => ({ extId: c.extId, title: c.title, byRule: false }))
+    return Array.from({ length: id === 4 ? 17 : 23 }, (_, i) => ({ extId: 'x' + id + '_' + i, title: (id === 4 ? 'Контакт ' : 'Чат ') + (i + 1), byRule: id === 4 }))
+  },
+  RemoveFromFolder: async (id, ids, alsoCRM) => { await wait(400); return { removed: ids.length, folderDeleted: false, removedFromCrm: alsoCRM ? ids.length : 0 } },
   Resync: async () => mock.SyncFolder(settings.tgFolderId || 2, settings.tgFolderName || 'clients'),
 
   ListChats: async (channel, search) => {

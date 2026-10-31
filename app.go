@@ -241,6 +241,36 @@ func (a *App) SyncFolder(folderID int, folderName string) (telegram.SyncResult, 
 	return a.tg.Sync(a.ctx, folderID, a.historyLimit())
 }
 
+func (a *App) FolderChats(folderID int) ([]telegram.FolderChat, error) {
+	return a.tg.FolderChats(a.ctx, folderID)
+}
+
+type FolderCleanResult struct {
+	telegram.RemoveResult
+	RemovedFromCRM int `json:"removedFromCrm"`
+}
+
+// RemoveFromFolder убирает выбранные чаты из папки Telegram одним запросом;
+// alsoCRM — заодно удалить их из CRM.
+func (a *App) RemoveFromFolder(folderID int, extIDs []string, alsoCRM bool) (FolderCleanResult, error) {
+	r, err := a.tg.RemoveFromFolder(a.ctx, folderID, extIDs)
+	if err != nil {
+		return FolderCleanResult{}, err
+	}
+	out := FolderCleanResult{RemoveResult: r}
+	if alsoCRM {
+		out.RemovedFromCRM, _ = a.st.DeleteChatsByExt(a.ctx, "tg", extIDs)
+		a.emit("chats:changed", nil)
+	}
+	if r.FolderDeleted {
+		if fid, _ := strconv.Atoi(a.st.Get(a.ctx, "tg_folder_id")); fid == folderID {
+			_ = a.st.Set(a.ctx, "tg_folder_id", "0")
+			_ = a.st.Set(a.ctx, "tg_folder_name", "")
+		}
+	}
+	return out, nil
+}
+
 func (a *App) Resync() (telegram.SyncResult, error) {
 	fid, _ := strconv.Atoi(a.st.Get(a.ctx, "tg_folder_id"))
 	if fid == 0 {

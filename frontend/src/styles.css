@@ -322,3 +322,13 @@ button:disabled { cursor: default; opacity: .5; }
 .theme-card[aria-checked="true"] .radio::after { content: ''; width: 8px; height: 8px; border-radius: 50%; background: var(--accent-line); }
 .plugins-empty { display: flex; gap: 16px; align-items: flex-start; padding: 20px; border-radius: 16px; border: 1px dashed var(--empty-line); }
 .plugins-empty-ico { width: 52px; height: 52px; border-radius: 14px; background: var(--raise); color: var(--muted); display: grid; place-items: center; flex-shrink: 0; }
+
+/* ---------- папки и модальное окно ---------- */
+.folder-row { display: flex; gap: 8px; align-items: stretch; }
+.folder-row .option { flex: 1; min-width: 0; }
+.folder-clean { height: auto; min-height: 52px; width: 52px; border-radius: 14px; color: var(--muted); }
+.folder-clean:hover { color: var(--danger); border-color: var(--danger-line); }
+.modal-back { position: fixed; inset: 0; z-index: 60; background: rgba(5,6,8,.6); display: grid; place-items: center; padding: 24px; }
+.modal { width: min(620px, 100%); max-height: calc(100vh - 48px); overflow: auto; background: var(--panel); border: 1px solid var(--line-2); border-radius: 22px; padding: 24px; display: flex; flex-direction: column; gap: 16px; box-shadow: 0 20px 60px var(--shadow); }
+.modal h2 { margin: 0; font-size: 19px; font-weight: 600; }
+.modal-head { display: flex; gap: 16px; align-items: flex-start; justify-content: space-between; }

@@ -196,6 +196,9 @@ function Folders({ tg, settings, reloadSettings, toast, done }) {
   const [folders, setFolders] = useState(null)
   const [sel, setSel] = useState(settings?.tgFolderId || 0)
   const [progress, setProgress] = useState(null)
+  const [cleaning, setCleaning] = useState(null)
+
+  const loadFolders = () => api.tgFolders().then(setFolders).catch((e) => toast(errText(e), 'err'))
 
   useEffect(() => {
     api.tgFolders().then((f) => {
@@ -237,12 +240,17 @@ function Folders({ tg, settings, reloadSettings, toast, done }) {
         {!folders && <p className="hint">Загружаем папки…</p>}
         {folders?.length === 0 && <p className="hint">Папок нет. Создайте в Telegram папку «clients» и добавьте туда чаты клиентов.</p>}
         {folders?.map((f) => (
-          <button key={f.id} type="button" className="option" aria-pressed={f.id === sel} onClick={() => setSel(f.id)}>
-            <span className="radio" aria-hidden="true" />
-            <Icon name="folder" size={16} />
-            <span style={{ fontWeight: 500 }}>{f.title}</span>
-            <span className="mono" style={{ marginLeft: 'auto', fontSize: 12, color: 'var(--muted-2)' }}>{f.hasRules ? 'по правилам' : `${f.count} чатов`}</span>
-          </button>
+          <div key={f.id} className="folder-row">
+            <button type="button" className="option" aria-pressed={f.id === sel} onClick={() => setSel(f.id)}>
+              <span className="radio" aria-hidden="true" />
+              <Icon name="folder" size={16} />
+              <span style={{ fontWeight: 500 }}>{f.title}</span>
+              <span className="mono" style={{ marginLeft: 'auto', fontSize: 12, color: 'var(--muted-2)' }}>{f.hasRules ? 'по правилам' : `${f.count} чатов`}</span>
+            </button>
+            <button type="button" className="icon-btn folder-clean" title="Убрать чаты из папки" aria-label={`Убрать чаты из папки ${f.title}`} onClick={() => setCleaning(f)}>
+              <Icon name="eject" size={18} />
+            </button>
+          </div>
         ))}
       </fieldset>
 
@@ -257,6 +265,113 @@ function Folders({ tg, settings, reloadSettings, toast, done }) {
         {settings?.tgFolderId === sel ? 'Синхронизировать' : `Импортировать${picked && !picked.hasRules ? ` ${picked.count} чатов` : ''}`}
         <Icon name="arrow" size={16} />
       </button>
+
+      {cleaning && (
+        <FolderClean folder={cleaning} toast={toast} close={() => setCleaning(null)}
+          onDone={(deleted) => { if (deleted && sel === cleaning.id) setSel(0); loadFolders(); reloadSettings() }} />
+      )}
     </>
+  )
+}
+
+
+// Окно «Убрать из папки»: выбрал чаты — один запрос в Telegram.
+function FolderClean({ folder, toast, close, onDone }) {
+  const [chats, setChats] = useState(null)
+  const [picked, setPicked] = useState(new Set())
+  const [q, setQ] = useState('')
+  const [alsoCRM, setAlsoCRM] = useState(false)
+  const [busy, setBusy] = useState(false)
+
+  useEffect(() => {
+    api.folderChats(folder.id).then((c) => { setChats(c); setPicked(new Set(c.map((x) => x.extId))) })
+      .catch((e) => { toast(errText(e), 'err'); close() })
+    const onKey = (e) => e.key === 'Escape' && close()
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+
+  const s = q.trim().toLowerCase()
+  const visible = (chats || []).filter((c) => !s || c.title.toLowerCase().includes(s))
+  const allVisible = visible.length > 0 && visible.every((c) => picked.has(c.extId))
+  const toggle = (id) => setPicked((p) => { const n = new Set(p); n.has(id) ? n.delete(id) : n.add(id); return n })
+  const toggleAll = () => setPicked((p) => {
+    const n = new Set(p)
+    visible.forEach((c) => (allVisible ? n.delete(c.extId) : n.add(c.extId)))
+    return n
+  })
+  const everything = chats && picked.size === chats.length && !folder.hasRules
+
+  async function run() {
+    const ids = [...picked]
+    const msg = everything
+      ? `Убрать все ${ids.length} чатов? Пустая папка «${folder.title}» будет удалена из Telegram. Сами чаты и переписка останутся.`
+      : `Убрать ${ids.length} чатов из папки «${folder.title}»? Сами чаты и переписка в Telegram останутся.`
+    if (!window.confirm(msg)) return
+    setBusy(true)
+    try {
+      const r = await api.removeFromFolder(folder.id, ids, alsoCRM)
+      toast(`Убрано из папки: ${r.removed}${r.folderDeleted ? ' · папка удалена' : ''}${alsoCRM ? ` · из CRM: ${r.removedFromCrm}` : ''}`)
+      onDone(r.folderDeleted)
+      close()
+    } catch (e) { toast(errText(e), 'err') } finally { setBusy(false) }
+  }
+
+  return (
+    <div className="modal-back" onMouseDown={(e) => e.target === e.currentTarget && close()}>
+      <div className="modal" role="dialog" aria-modal="true" aria-labelledby="fc-title">
+        <div className="modal-head">
+          <div>
+            <h2 id="fc-title">Убрать из папки «{folder.title}»</h2>
+            <p className="hint" style={{ marginTop: 4 }}>Чаты исчезнут только из папки — переписка в Telegram не удаляется.</p>
+          </div>
+          <button type="button" className="icon-btn" aria-label="Закрыть" onClick={close}><Icon name="close" /></button>
+        </div>
+
+        {!chats ? <p className="hint">Загружаем чаты папки…</p> : (
+          <>
+            <div className="row" style={{ justifyContent: 'space-between' }}>
+              <label className="search" style={{ flex: '1 1 240px' }}>
+                <Icon name="search" size={16} />
+                <span className="sr">Поиск по чатам папки</span>
+                <input type="search" placeholder="Поиск" value={q} onChange={(e) => setQ(e.target.value)} />
+              </label>
+              <label className="check">
+                <input type="checkbox" checked={allVisible} onChange={toggleAll} />
+                Выбрать все{s ? ' найденные' : ''}
+              </label>
+            </div>
+
+            <div className="recipients" style={{ maxHeight: 360 }}>
+              {visible.map((c) => (
+                <label key={c.extId} className="recipient">
+                  <input type="checkbox" checked={picked.has(c.extId)} onChange={() => toggle(c.extId)} />
+                  <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontWeight: 500 }}>{c.title}</span>
+                  {c.byRule && <span className="chip chip-muted" style={{ marginLeft: 'auto' }}>по правилу</span>}
+                </label>
+              ))}
+              {visible.length === 0 && <p className="hint" style={{ padding: 10 }}>{chats.length ? 'Ничего не найдено' : 'В папке нет чатов'}</p>}
+            </div>
+
+            {folder.hasRules && [...picked].some((id) => chats.find((c) => c.extId === id)?.byRule) && (
+              <p className="hint">Чаты «по правилу» попадут в исключения папки. Если нужно убрать всех — проще выключить само правило в настройках папки Telegram.</p>
+            )}
+
+            <div className="row" style={{ justifyContent: 'space-between' }}>
+              <label className="check">
+                <input type="checkbox" checked={alsoCRM} onChange={(e) => setAlsoCRM(e.target.checked)} />
+                Удалить их и из CRM
+              </label>
+              <div className="row">
+                <button type="button" className="btn" onClick={close}>Отмена</button>
+                <button type="button" className="btn btn-primary" disabled={busy || picked.size === 0} onClick={run}>
+                  {busy ? 'Убираем…' : `Убрать ${picked.size}`}
+                </button>
+              </div>
+            </div>
+          </>
+        )}
+      </div>
+    </div>
   )
 }
