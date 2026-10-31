@@ -7,10 +7,14 @@ import (
 	"github.com/wailsapp/wails/v2"
 	"github.com/wailsapp/wails/v2/pkg/options"
 	"github.com/wailsapp/wails/v2/pkg/options/assetserver"
+	"github.com/wailsapp/wails/v2/pkg/options/linux"
 )
 
 //go:embed all:frontend/dist
 var assets embed.FS
+
+//go:embed build/appicon.png
+var icon []byte
 
 func main() {
 	app := NewApp()
@@ -25,6 +29,8 @@ func main() {
 		OnStartup:        app.startup,
 		OnShutdown:       app.shutdown,
 		Bind:             []interface{}{app},
+		// иконка окна и в доке; ProgramName = имя ярлыка sinaps-crm.desktop
+		Linux: &linux.Options{Icon: icon, ProgramName: "sinaps-crm"},
 	})
 	if err != nil {
 		log.Fatal(err)

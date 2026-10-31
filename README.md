@@ -21,6 +21,8 @@ cd frontend && npm i && npm run dev
 
 Нужны Go 1.24+ и Node 20+. На Windows 10/11 WebView2 уже стоит.
 
+**Иконка в доке Ubuntu:** после `wails build` один раз выполните `bash build/linux/install.sh`. Ярлык появится в меню приложений, его можно закрепить в доке. Иконка лежит в `build/appicon.png`, из неё же Wails делает `.ico` для Windows.
+
 ## Первый запуск
 
 1. Получите **API ID / API Hash** на my.telegram.org → API development tools.
