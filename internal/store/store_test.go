@@ -70,3 +70,45 @@ func TestDedup(t *testing.T) {
 		t.Fatal("search")
 	}
 }
+
+func TestRemoteDelete(t *testing.T) {
+	ctx := context.Background()
+	s, err := Open(filepath.Join(t.TempDir(), "crm.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	id, _, _ := s.UpsertChat(ctx, Chat{Channel: "tg", ExtID: "u7", Kind: "user", PeerID: 7, Title: "Клиент"})
+	ch, _, _ := s.UpsertChat(ctx, Chat{Channel: "tg", ExtID: "ch9", Kind: "channel", PeerID: 9, Title: "Группа"})
+	_, _ = s.AddMessage(ctx, Message{ChatID: id, MsgID: 1, Out: false, Text: "вопрос", Date: 1}, false)
+	_, _ = s.AddMessage(ctx, Message{ChatID: id, MsgID: 2, Out: true, Text: "ответ", Date: 2}, false)
+	_, _ = s.AddMessage(ctx, Message{ChatID: id, MsgID: 3, Out: true, MediaKind: "photo", MediaRef: `{"id":1}`, Date: 3}, false)
+	_, _ = s.AddMessage(ctx, Message{ChatID: ch, MsgID: 2, Out: true, Text: "в группе", Date: 2}, false)
+
+	c, _ := s.Chat(ctx, id)
+	if c.LastMsg != "Фото" {
+		t.Fatalf("preview %q", c.LastMsg)
+	}
+	// удалили в личке id 1 (клиента), 2 и 3 (мои); в канале с тем же id 2 ничего не трогаем
+	res, err := s.ApplyRemoteDelete(ctx, "", []int{1, 2, 3})
+	if err != nil || len(res) != 1 || len(res[0].Removed) != 2 || len(res[0].Marked) != 1 {
+		t.Fatalf("%v %+v", err, res)
+	}
+	ms, _ := s.Messages(ctx, id, 0)
+	if len(ms) != 1 || !ms[0].Deleted || ms[0].Text != "вопрос" {
+		t.Fatalf("%+v", ms)
+	}
+	c, _ = s.Chat(ctx, id)
+	if c.LastMsg != "вопрос" || c.LastOut {
+		t.Fatalf("last %+v", c)
+	}
+	if g, _ := s.Messages(ctx, ch, 0); len(g) != 1 {
+		t.Fatal("channel message touched")
+	}
+	// старое «[фото]» дополняется ссылкой при повторном импорте
+	_, _ = s.AddMessage(ctx, Message{ChatID: ch, MsgID: 5, Text: "[фото]", Date: 5}, false)
+	_, _ = s.AddMessage(ctx, Message{ChatID: ch, MsgID: 5, MediaKind: "photo", MediaRef: `{"id":2}`, Date: 5}, false)
+	m, _ := s.MessageByMsg(ctx, ch, 5)
+	if m.MediaKind != "photo" || m.Text != "" {
+		t.Fatalf("%+v", m)
+	}
+}

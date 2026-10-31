@@ -20,7 +20,7 @@ func main() {
 		Height:           900,
 		MinWidth:         1024,
 		MinHeight:        680,
-		AssetServer:      &assetserver.Options{Assets: assets},
+		AssetServer:      &assetserver.Options{Assets: assets, Handler: app.mediaHandler()},
 		BackgroundColour: &options.RGBA{R: 13, G: 14, B: 17, A: 255},
 		OnStartup:        app.startup,
 		OnShutdown:       app.shutdown,

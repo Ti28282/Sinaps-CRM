@@ -33,6 +33,11 @@ chats.forEach((c) => {
     { id: 2, chatId: c.id, msgId: 2, out: !!c.lastOut, date: c.lastAt, text: c.lastMsg },
   ]
 })
+const demoPhoto = 'data:image/svg+xml;utf8,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="640" height="420"><rect width="640" height="420" fill="#2B2F38"/><circle cx="470" cy="120" r="54" fill="#F5B65C"/><path d="M0 420 L210 190 L360 330 L450 250 L640 420Z" fill="#4A5160"/></svg>')
+const fp = chats.find((c) => c.title.startsWith('Фитнес'))
+messages[fp.id].splice(1, 0, { id: 500, chatId: fp.id, msgId: 500, out: false, date: fp.lastAt - 600, text: 'Вот так сейчас выглядит наше расписание', mediaKind: 'photo', mediaUrl: demoPhoto })
+messages[fp.id][0].deleted = false
+messages[fp.id].splice(1, 0, { id: 501, chatId: fp.id, msgId: 501, out: false, date: fp.lastAt - 1200, text: 'Ой, не туда отправил', deleted: true })
 const events = {}
 
 const find = (id) => chats.find((c) => c.id === id)
@@ -98,6 +103,10 @@ export const mock = {
     Object.assign(c, { lastMsg: text, lastAt: m.date, lastOut: true, unread: false })
     if (c.stage === 'new') c.stage = 'sent'
     emit('message:new', m); emit('chats:changed')
+  },
+  DeleteMessage: async (chatId, msgId) => {
+    messages[chatId] = messages[chatId].filter((m) => m.msgId !== msgId)
+    emit('message:deleted', { chatId, removed: [msgId], marked: [] }); emit('chats:changed')
   },
   Stats: async () => {
     const s = { total: chats.length, unread: 0, pipeline: 0, won: 0, byStage: {}, byChannel: { tg: chats.length } }

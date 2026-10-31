@@ -41,6 +41,7 @@ export const api = {
   markRead: (id) => call('MarkRead', id),
   deleteChat: (id) => call('DeleteChat', id),
   send: (id, text) => call('SendMessage', id, text),
+  deleteMessage: (chatId, msgId) => call('DeleteMessage', chatId, msgId),
   stats: () => call('Stats'),
 
   broadcastStatus: () => call('BroadcastStatus'),

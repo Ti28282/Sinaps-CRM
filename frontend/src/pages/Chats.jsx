@@ -51,6 +51,7 @@ function Thread({ id, toast, tg, onDeleted }) {
   const [view, setView] = useState(null)
   const [text, setText] = useState('')
   const [sending, setSending] = useState(false)
+  const [photo, setPhoto] = useState(null)
   const body = useRef(null)
 
   const load = () => api.chat(id).then(setView).catch((e) => toast(errText(e), 'err'))
@@ -63,8 +64,18 @@ function Thread({ id, toast, tg, onDeleted }) {
       setView((v) => (v && !v.messages.some((x) => x.msgId === m.msgId) ? { ...v, messages: [...v.messages, m] } : v))
       api.markRead(id).catch(() => {})
     })
+    const off3 = on('message:deleted', (r) => {
+      if (r.chatId !== id) return
+      const removed = new Set(r.removed || []), marked = new Set(r.marked || [])
+      setView((v) => v && {
+        ...v,
+        messages: v.messages
+          .filter((x) => !removed.has(x.msgId))
+          .map((x) => (marked.has(x.msgId) ? { ...x, deleted: true } : x)),
+      })
+    })
     const off2 = on('chats:changed', () => api.chat(id).then((v) => setView((cur) => (cur ? { ...cur, chat: v.chat, events: v.events } : v))).catch(() => {}))
-    return () => { off1 && off1(); off2 && off2() }
+    return () => { off1 && off1(); off2 && off2(); off3 && off3() }
   }, [id]) // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
@@ -83,6 +94,11 @@ function Thread({ id, toast, tg, onDeleted }) {
 
   async function patch(p) {
     try { await api.updateChat(id, p) } catch (e) { toast(errText(e), 'err') }
+  }
+
+  async function removeMsg(m) {
+    if (!window.confirm('Удалить сообщение у вас и у клиента в Telegram?')) return
+    try { await api.deleteMessage(id, m.msgId) } catch (e) { toast(errText(e), 'err') }
   }
 
   async function remove() {
@@ -114,14 +130,29 @@ function Thread({ id, toast, tg, onDeleted }) {
             return (
               <Fragment key={m.msgId}>
                 {showDay && <div className="day">{d}</div>}
-                <div className={'bubble' + (m.out ? ' out' : '')}>
-                  {m.text}
-                  <div className="time">{clock(m.date)}</div>
+                <div className={'bubble' + (m.out ? ' out' : '') + (m.deleted ? ' deleted' : '') + (m.mediaKind === 'photo' ? ' has-photo' : '')}>
+                  {m.mediaKind === 'photo' && <Photo m={m} open={setPhoto} />}
+                  {m.text && <div className="bubble-text">{m.text}</div>}
+                  <div className="time">
+                    {m.deleted && <span className="deleted-tag">удалено клиентом · </span>}
+                    {clock(m.date)}
+                  </div>
+                  {m.out && tg.state === 'ready' && (
+                    <button type="button" className="msg-del" aria-label="Удалить сообщение у всех" onClick={() => removeMsg(m)}>
+                      <Icon name="trash" size={14} />
+                    </button>
+                  )}
                 </div>
               </Fragment>
             )
           })}
         </div>
+
+        {photo && (
+          <button type="button" className="lightbox" aria-label="Закрыть фото" onClick={() => setPhoto(null)}>
+            <img src={photo} alt="Фото из переписки" />
+          </button>
+        )}
 
         <div className="composer">
           <label style={{ flex: 1 }} className="field">
@@ -138,6 +169,17 @@ function Thread({ id, toast, tg, onDeleted }) {
 
       <ClientCard key={c.id + ':' + c.stage} chat={c} events={view.events} patch={patch} />
     </>
+  )
+}
+
+function Photo({ m, open }) {
+  const [failed, setFailed] = useState(false)
+  const src = m.mediaUrl || `/media/${m.chatId}/${m.msgId}`
+  if (failed) return <div className="photo-missing">Фото недоступно</div>
+  return (
+    <button type="button" className="photo" onClick={() => open(src)} aria-label="Открыть фото">
+      <img src={src} alt="Фото" loading="lazy" onError={() => setFailed(true)} />
+    </button>
   )
 }
 

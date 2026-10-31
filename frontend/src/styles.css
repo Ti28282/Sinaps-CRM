@@ -210,3 +210,19 @@ button:disabled { cursor: default; opacity: .5; }
 .toast.err { border-color: #5A3330; color: #FFB4AD; }
 .toast.ok { border-color: #3D4A1E; }
 .demo-badge { position: fixed; left: 50%; bottom: 14px; transform: translateX(-50%); font-size: 12px; padding: 4px 10px; border-radius: 999px; background: #2A2410; color: #F5D27A; border: 1px solid #4A3F18; z-index: 60; }
+
+/* ---------- фото и удаление ---------- */
+.bubble { position: relative; }
+.bubble.has-photo { padding: 4px; }
+.bubble.has-photo .bubble-text { padding: 6px 10px 0; }
+.bubble.has-photo .time { padding: 0 10px 6px; }
+.photo { display: block; padding: 0; border: 0; background: #0000; border-radius: 12px; overflow: hidden; cursor: zoom-in; }
+.photo img { display: block; max-width: min(360px, 100%); max-height: 420px; min-width: 120px; min-height: 80px; object-fit: cover; background: #22252C; }
+.photo-missing { padding: 28px 18px; border-radius: 12px; background: rgba(0,0,0,.18); font-size: 13px; opacity: .8; }
+.bubble.deleted { opacity: .6; }
+.deleted-tag { font-style: italic; }
+.msg-del { position: absolute; top: 50%; left: -40px; transform: translateY(-50%); width: 30px; height: 30px; border-radius: 8px; border: 1px solid var(--line-3); background: var(--card); color: var(--muted); display: grid; place-items: center; opacity: 0; transition: opacity .12s; }
+.bubble:hover .msg-del, .msg-del:focus-visible { opacity: 1; }
+.msg-del:hover { color: var(--danger); border-color: #5A3330; }
+.lightbox { position: fixed; inset: 0; z-index: 70; background: rgba(5,6,8,.88); border: 0; display: grid; place-items: center; padding: 40px; cursor: zoom-out; }
+.lightbox img { max-width: 100%; max-height: 100%; border-radius: 12px; }

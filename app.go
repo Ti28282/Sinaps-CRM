@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"math/rand"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -306,6 +307,62 @@ func (a *App) SendMessage(id int64, text string) error {
 }
 
 func (a *App) Stats() (store.Stats, error) { return a.st.Stats(a.ctx) }
+
+// DeleteMessage — удалить своё сообщение у обоих в Telegram и из CRM.
+func (a *App) DeleteMessage(chatID, msgID int64) error {
+	c, err := a.st.Chat(a.ctx, chatID)
+	if err != nil {
+		return err
+	}
+	return a.tg.DeleteMessage(a.ctx, c, msgID)
+}
+
+// ---------- фото ----------
+
+// mediaHandler отдаёт фото по адресу /media/{chatId}/{msgId}.
+// Файл качается из Telegram один раз при первом показе и дальше берётся с диска.
+func (a *App) mediaHandler() http.Handler {
+	var locks sync.Map
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		parts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
+		if len(parts) != 3 || parts[0] != "media" {
+			http.NotFound(w, r)
+			return
+		}
+		chatID, err1 := strconv.ParseInt(parts[1], 10, 64)
+		msgID, err2 := strconv.ParseInt(parts[2], 10, 64)
+		if err1 != nil || err2 != nil || a.st == nil {
+			http.NotFound(w, r)
+			return
+		}
+		path := filepath.Join(a.dataDir, "media", parts[1], parts[2]+".jpg")
+
+		mu, _ := locks.LoadOrStore(path, &sync.Mutex{})
+		mu.(*sync.Mutex).Lock()
+		defer mu.(*sync.Mutex).Unlock()
+
+		if _, err := os.Stat(path); err != nil {
+			m, err := a.st.MessageByMsg(r.Context(), chatID, msgID)
+			if err != nil || m.MediaKind != "photo" {
+				http.NotFound(w, r)
+				return
+			}
+			c, err := a.st.Chat(r.Context(), chatID)
+			if err != nil {
+				http.NotFound(w, r)
+				return
+			}
+			ctx, cancel := context.WithTimeout(a.ctx, 60*time.Second)
+			defer cancel()
+			if err := a.tg.DownloadPhoto(ctx, c, m, path); err != nil {
+				http.Error(w, err.Error(), http.StatusBadGateway)
+				return
+			}
+		}
+		w.Header().Set("Cache-Control", "max-age=31536000, immutable")
+		http.ServeFile(w, r, path)
+	})
+}
 
 // ---------- рассылки ----------
 

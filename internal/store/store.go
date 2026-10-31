@@ -56,6 +56,9 @@ CREATE TABLE IF NOT EXISTS messages(
   out     INTEGER NOT NULL,
   text    TEXT    NOT NULL,
   date    INTEGER NOT NULL,
+  media_kind TEXT NOT NULL DEFAULT '',     -- photo | …
+  media_ref  TEXT NOT NULL DEFAULT '',     -- JSON: как скачать файл из Telegram
+  deleted    INTEGER NOT NULL DEFAULT 0,   -- клиент удалил у себя — у нас остаётся
   UNIQUE(chat_id, msg_id)
 );
 CREATE INDEX IF NOT EXISTS idx_messages_chat_date ON messages(chat_id, date);
@@ -105,12 +108,15 @@ type Chat struct {
 }
 
 type Message struct {
-	ID     int64  `json:"id"`
-	ChatID int64  `json:"chatId"`
-	MsgID  int64  `json:"msgId"`
-	Out    bool   `json:"out"`
-	Text   string `json:"text"`
-	Date   int64  `json:"date"`
+	ID        int64  `json:"id"`
+	ChatID    int64  `json:"chatId"`
+	MsgID     int64  `json:"msgId"`
+	Out       bool   `json:"out"`
+	Text      string `json:"text"`
+	Date      int64  `json:"date"`
+	MediaKind string `json:"mediaKind"`
+	MediaRef  string `json:"-"`
+	Deleted   bool   `json:"deleted"`
 }
 
 type Event struct {
@@ -139,7 +145,44 @@ func Open(path string) (*Store, error) {
 		db.Close()
 		return nil, fmt.Errorf("schema: %w", err)
 	}
-	return &Store{db: db}, nil
+	st := &Store{db: db}
+	if err := st.migrate(); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("migrate: %w", err)
+	}
+	return st, nil
+}
+
+// migrate добавляет колонки, появившиеся после первой версии базы.
+func (s *Store) migrate() error {
+	cols := map[string]bool{}
+	rows, err := s.db.Query(`PRAGMA table_info(messages)`)
+	if err != nil {
+		return err
+	}
+	for rows.Next() {
+		var cid, notnull, pk int
+		var name, typ string
+		var def sql.NullString
+		if err := rows.Scan(&cid, &name, &typ, &notnull, &def, &pk); err != nil {
+			rows.Close()
+			return err
+		}
+		cols[name] = true
+	}
+	rows.Close()
+	for _, c := range []struct{ name, ddl string }{
+		{"media_kind", `ALTER TABLE messages ADD COLUMN media_kind TEXT NOT NULL DEFAULT ''`},
+		{"media_ref", `ALTER TABLE messages ADD COLUMN media_ref TEXT NOT NULL DEFAULT ''`},
+		{"deleted", `ALTER TABLE messages ADD COLUMN deleted INTEGER NOT NULL DEFAULT 0`},
+	} {
+		if !cols[c.name] {
+			if _, err := s.db.Exec(c.ddl); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 func (s *Store) Close() error { return s.db.Close() }
@@ -308,20 +351,26 @@ func (s *Store) DeleteChat(ctx context.Context, id int64) error {
 // live=true — сообщение пришло в реальном времени (не из импорта истории).
 func (s *Store) AddMessage(ctx context.Context, m Message, live bool) (inserted bool, err error) {
 	res, err := s.db.ExecContext(ctx,
-		`INSERT INTO messages(chat_id,msg_id,out,text,date) VALUES(?,?,?,?,?)
+		`INSERT INTO messages(chat_id,msg_id,out,text,date,media_kind,media_ref) VALUES(?,?,?,?,?,?,?)
 		 ON CONFLICT(chat_id,msg_id) DO NOTHING`,
-		m.ChatID, m.MsgID, b2i(m.Out), m.Text, m.Date)
+		m.ChatID, m.MsgID, b2i(m.Out), m.Text, m.Date, m.MediaKind, m.MediaRef)
 	if err != nil {
 		return false, err
 	}
 	n, _ := res.RowsAffected()
 	if n == 0 {
-		return false, nil
+		// сообщение уже есть: докидываем фото, если раньше его не сохраняли
+		if m.MediaRef != "" {
+			_, err = s.db.ExecContext(ctx, `UPDATE messages SET media_kind=?, media_ref=?,
+  text = CASE WHEN text='[фото]' THEN ? ELSE text END
+WHERE chat_id=? AND msg_id=?`, m.MediaKind, m.MediaRef, m.Text, m.ChatID, m.MsgID)
+		}
+		return false, err
 	}
 	// превью последнего сообщения
 	_, err = s.db.ExecContext(ctx,
 		`UPDATE chats SET last_msg=?, last_at=?, last_out=? WHERE id=? AND last_at<=?`,
-		preview(m.Text), m.Date, b2i(m.Out), m.ChatID, m.Date)
+		previewOf(m.Text, m.MediaKind), m.Date, b2i(m.Out), m.ChatID, m.Date)
 	if err != nil {
 		return true, err
 	}
@@ -346,7 +395,7 @@ func (s *Store) Messages(ctx context.Context, chatID int64, limit int) ([]Messag
 		limit = 500
 	}
 	rows, err := s.db.QueryContext(ctx, `
-SELECT id,chat_id,msg_id,out,text,date FROM (
+SELECT `+msgCols+` FROM (
   SELECT * FROM messages WHERE chat_id=? ORDER BY date DESC, msg_id DESC LIMIT ?
 ) ORDER BY date ASC, msg_id ASC`, chatID, limit)
 	if err != nil {
@@ -355,15 +404,143 @@ SELECT id,chat_id,msg_id,out,text,date FROM (
 	defer rows.Close()
 	out := []Message{}
 	for rows.Next() {
-		var m Message
-		var o int
-		if err := rows.Scan(&m.ID, &m.ChatID, &m.MsgID, &o, &m.Text, &m.Date); err != nil {
+		m, err := scanMsg(rows)
+		if err != nil {
 			return nil, err
 		}
-		m.Out = o == 1
 		out = append(out, m)
 	}
 	return out, rows.Err()
+}
+
+const msgCols = `id,chat_id,msg_id,out,text,date,media_kind,media_ref,deleted`
+
+func scanMsg(r interface{ Scan(...any) error }) (Message, error) {
+	var m Message
+	var o, d int
+	err := r.Scan(&m.ID, &m.ChatID, &m.MsgID, &o, &m.Text, &m.Date, &m.MediaKind, &m.MediaRef, &d)
+	m.Out, m.Deleted = o == 1, d == 1
+	return m, err
+}
+
+func (s *Store) MessageByID(ctx context.Context, id int64) (Message, error) {
+	return scanMsg(s.db.QueryRowContext(ctx, `SELECT `+msgCols+` FROM messages WHERE id=?`, id))
+}
+
+func (s *Store) MessageByMsg(ctx context.Context, chatID, msgID int64) (Message, error) {
+	return scanMsg(s.db.QueryRowContext(ctx, `SELECT `+msgCols+` FROM messages WHERE chat_id=? AND msg_id=?`, chatID, msgID))
+}
+
+func (s *Store) SetMediaRef(ctx context.Context, id int64, ref string) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE messages SET media_ref=? WHERE id=?`, ref, id)
+	return err
+}
+
+// DeleteResult — что поменялось в чате после удаления в Telegram.
+type DeleteResult struct {
+	ChatID  int64   `json:"chatId"`
+	Removed []int64 `json:"removed"` // наши сообщения — убраны из CRM
+	Marked  []int64 `json:"marked"`  // сообщения клиента — остались с пометкой «удалено»
+}
+
+// ApplyRemoteDelete: Telegram сообщил, что сообщения удалены.
+// Свои (out) удаляем и из CRM, сообщения клиента оставляем с пометкой.
+// channelExt == "" — личка и обычные группы (id сообщений общие на аккаунт),
+// иначе ext_id канала/супергруппы ("ch123").
+func (s *Store) ApplyRemoteDelete(ctx context.Context, channelExt string, ids []int) ([]DeleteResult, error) {
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	ph := strings.TrimSuffix(strings.Repeat("?,", len(ids)), ",")
+	args := []any{}
+	q := `SELECT m.id, m.chat_id, m.msg_id, m.out FROM messages m JOIN chats c ON c.id=m.chat_id
+WHERE c.channel='tg' AND m.deleted=0 AND `
+	if channelExt == "" {
+		q += `c.kind IN ('user','chat')`
+	} else {
+		q += `c.ext_id=?`
+		args = append(args, channelExt)
+	}
+	q += ` AND m.msg_id IN (` + ph + `)`
+	for _, id := range ids {
+		args = append(args, id)
+	}
+	rows, err := s.db.QueryContext(ctx, q, args...)
+	if err != nil {
+		return nil, err
+	}
+	type hit struct {
+		row, chat, msg int64
+		out            bool
+	}
+	var hits []hit
+	for rows.Next() {
+		var h hit
+		var o int
+		if err := rows.Scan(&h.row, &h.chat, &h.msg, &o); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		h.out = o == 1
+		hits = append(hits, h)
+	}
+	rows.Close()
+
+	byChat := map[int64]*DeleteResult{}
+	var order []int64
+	for _, h := range hits {
+		r := byChat[h.chat]
+		if r == nil {
+			r = &DeleteResult{ChatID: h.chat, Removed: []int64{}, Marked: []int64{}}
+			byChat[h.chat] = r
+			order = append(order, h.chat)
+		}
+		if h.out {
+			if _, err := s.db.ExecContext(ctx, `DELETE FROM messages WHERE id=?`, h.row); err != nil {
+				return nil, err
+			}
+			r.Removed = append(r.Removed, h.msg)
+		} else {
+			if _, err := s.db.ExecContext(ctx, `UPDATE messages SET deleted=1 WHERE id=?`, h.row); err != nil {
+				return nil, err
+			}
+			r.Marked = append(r.Marked, h.msg)
+		}
+	}
+	out := make([]DeleteResult, 0, len(order))
+	for _, id := range order {
+		if len(byChat[id].Removed) > 0 {
+			_ = s.refreshLast(ctx, id)
+		}
+		out = append(out, *byChat[id])
+	}
+	return out, nil
+}
+
+// DeleteOwnMessage — удаление своего сообщения из CRM (в Telegram уже удалено).
+func (s *Store) DeleteOwnMessage(ctx context.Context, chatID, msgID int64) error {
+	if _, err := s.db.ExecContext(ctx, `DELETE FROM messages WHERE chat_id=? AND msg_id=? AND out=1`, chatID, msgID); err != nil {
+		return err
+	}
+	return s.refreshLast(ctx, chatID)
+}
+
+func (s *Store) refreshLast(ctx context.Context, chatID int64) error {
+	var text, kind string
+	var date int64
+	var out int
+	err := s.db.QueryRowContext(ctx, `SELECT text, media_kind, date, out FROM messages WHERE chat_id=?
+ORDER BY date DESC, msg_id DESC LIMIT 1`, chatID).Scan(&text, &kind, &date, &out)
+	if errors.Is(err, sql.ErrNoRows) {
+		_, err = s.db.ExecContext(ctx, `UPDATE chats SET last_msg='', last_out=0 WHERE id=?`, chatID)
+		return err
+	}
+	if err != nil {
+		return err
+	}
+	_, err = s.db.ExecContext(ctx, `UPDATE chats SET last_msg=?, last_at=?, last_out=? WHERE id=?`,
+		previewOf(text, kind), date, out, chatID)
+	return err
 }
 
 // ---------- events / sends ----------
@@ -476,6 +653,16 @@ func channelName(c string) string {
 		return "WhatsApp"
 	}
 	return "Telegram"
+}
+
+func previewOf(text, media string) string {
+	if p := preview(text); p != "" {
+		return p
+	}
+	if media == "photo" {
+		return "Фото"
+	}
+	return ""
 }
 
 func preview(t string) string {

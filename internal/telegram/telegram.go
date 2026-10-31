@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/binary"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -19,6 +20,7 @@ import (
 	gotg "github.com/gotd/td/telegram"
 	"github.com/gotd/td/telegram/auth"
 	"github.com/gotd/td/telegram/auth/qrlogin"
+	"github.com/gotd/td/telegram/downloader"
 	"github.com/gotd/td/telegram/query"
 	"github.com/gotd/td/telegram/query/dialogs"
 	"github.com/gotd/td/tg"
@@ -129,6 +131,15 @@ func (c *Client) Start(apiID int, apiHash string) error {
 	})
 	d.OnNewChannelMessage(func(ctx context.Context, e tg.Entities, u *tg.UpdateNewChannelMessage) error {
 		c.onMessage(ctx, u.Message)
+		return nil
+	})
+	// удаления: личка и группы приходят без чата (id сообщений общие на аккаунт)
+	d.OnDeleteMessages(func(ctx context.Context, e tg.Entities, u *tg.UpdateDeleteMessages) error {
+		c.onDelete(ctx, "", u.Messages)
+		return nil
+	})
+	d.OnDeleteChannelMessages(func(ctx context.Context, e tg.Entities, u *tg.UpdateDeleteChannelMessages) error {
+		c.onDelete(ctx, fmt.Sprintf("ch%d", u.ChannelID), u.Messages)
 		return nil
 	})
 
@@ -606,9 +617,7 @@ func (c *Client) Sync(ctx context.Context, folderID, limit int) (SyncResult, err
 			res.NewChats++
 		}
 		for _, m := range msgs {
-			ins, err := c.st.AddMessage(ctx, store.Message{
-				ChatID: id, MsgID: int64(m.ID), Out: m.Out, Text: msgText(m), Date: int64(m.Date),
-			}, false)
+			ins, err := c.st.AddMessage(ctx, toStore(id, m), false)
 			if err != nil {
 				return res, err
 			}
@@ -706,7 +715,7 @@ func (c *Client) onMessage(ctx context.Context, mc tg.MessageClass) {
 }
 
 func (c *Client) store(ctx context.Context, chatID int64, m *tg.Message, live bool) {
-	msg := store.Message{ChatID: chatID, MsgID: int64(m.ID), Out: m.Out, Text: msgText(m), Date: int64(m.Date)}
+	msg := toStore(chatID, m)
 	ins, err := c.st.AddMessage(ctx, msg, live)
 	if err != nil || !ins {
 		return
@@ -874,13 +883,21 @@ func (p *peer) resolveTitle(ctx context.Context, api *tg.Client) {
 
 // ---------- helpers ----------
 
+func toStore(chatID int64, m *tg.Message) store.Message {
+	msg := store.Message{ChatID: chatID, MsgID: int64(m.ID), Out: m.Out, Text: msgText(m), Date: int64(m.Date)}
+	if ref, ok := photoRef(m); ok {
+		msg.MediaKind, msg.MediaRef = "photo", ref
+	}
+	return msg
+}
+
 func msgText(m *tg.Message) string {
 	if t := strings.TrimSpace(m.Message); t != "" {
 		return t
 	}
 	switch m.Media.(type) {
 	case *tg.MessageMediaPhoto:
-		return "[фото]"
+		return "" // фото показываем картинкой
 	case *tg.MessageMediaDocument:
 		return "[файл]"
 	case *tg.MessageMediaGeo, *tg.MessageMediaGeoLive, *tg.MessageMediaVenue:
@@ -939,4 +956,163 @@ func humanErr(err error) error {
 		return fmt.Errorf("слишком часто — подождите %d с", int(d.Seconds()))
 	}
 	return err
+}
+
+// ---------- удаление ----------
+
+// onDelete: сообщения удалили в Telegram. Свои убираем из CRM,
+// сообщения клиента оставляем с пометкой «удалено».
+func (c *Client) onDelete(ctx context.Context, channelExt string, ids []int) {
+	res, err := c.st.ApplyRemoteDelete(ctx, channelExt, ids)
+	if err != nil || len(res) == 0 {
+		return
+	}
+	for _, r := range res {
+		c.emit("message:deleted", r)
+	}
+	c.emit("chats:changed", nil)
+}
+
+// DeleteMessage удаляет своё сообщение у обоих собеседников и из CRM.
+func (c *Client) DeleteMessage(ctx context.Context, chat store.Chat, msgID int64) error {
+	api, err := c.apiClient()
+	if err != nil {
+		return err
+	}
+	m, err := c.st.MessageByMsg(ctx, chat.ID, msgID)
+	if err != nil {
+		return errors.New("сообщение не найдено")
+	}
+	if !m.Out {
+		return errors.New("удалять можно только свои сообщения — переписка клиента сохраняется")
+	}
+	switch chat.Kind {
+	case "channel":
+		_, err = api.ChannelsDeleteMessages(ctx, &tg.ChannelsDeleteMessagesRequest{
+			Channel: &tg.InputChannel{ChannelID: chat.PeerID, AccessHash: chat.AccessHash}, ID: []int{int(msgID)},
+		})
+	default:
+		_, err = api.MessagesDeleteMessages(ctx, &tg.MessagesDeleteMessagesRequest{Revoke: true, ID: []int{int(msgID)}})
+	}
+	if err != nil && !tgerr.Is(err, "MESSAGE_DELETE_FORBIDDEN") {
+		return humanErr(err)
+	}
+	if err := c.st.DeleteOwnMessage(ctx, chat.ID, msgID); err != nil {
+		return err
+	}
+	c.emit("message:deleted", store.DeleteResult{ChatID: chat.ID, Removed: []int64{msgID}, Marked: []int64{}})
+	c.emit("chats:changed", nil)
+	return nil
+}
+
+// ---------- фото ----------
+
+type mediaRef struct {
+	ID   int64  `json:"id"`
+	Hash int64  `json:"hash"`
+	Ref  []byte `json:"ref"`
+	Size string `json:"size"`
+}
+
+func photoRef(m *tg.Message) (string, bool) {
+	mp, ok := m.Media.(*tg.MessageMediaPhoto)
+	if !ok {
+		return "", false
+	}
+	p, ok := mp.Photo.(*tg.Photo)
+	if !ok {
+		return "", false
+	}
+	size := biggestSize(p.Sizes)
+	if size == "" {
+		return "", false
+	}
+	b, _ := json.Marshal(mediaRef{ID: p.ID, Hash: p.AccessHash, Ref: p.FileReference, Size: size})
+	return string(b), true
+}
+
+// biggestSize — самый крупный вариант, но не больше ~1280px (тип «y»/«x»).
+func biggestSize(sizes []tg.PhotoSizeClass) string {
+	best, bestArea := "", 0
+	for _, s := range sizes {
+		var t string
+		var w, h int
+		switch v := s.(type) {
+		case *tg.PhotoSize:
+			t, w, h = v.Type, v.W, v.H
+		case *tg.PhotoSizeProgressive:
+			t, w, h = v.Type, v.W, v.H
+		default:
+			continue
+		}
+		if w*h > bestArea {
+			best, bestArea = t, w*h
+		}
+	}
+	return best
+}
+
+// DownloadPhoto скачивает фото сообщения в path. Если ссылка на файл устарела —
+// перезапрашивает сообщение у Telegram и пробует ещё раз.
+func (c *Client) DownloadPhoto(ctx context.Context, chat store.Chat, m store.Message, path string) error {
+	api, err := c.apiClient()
+	if err != nil {
+		return err
+	}
+	ref := m.MediaRef
+	for attempt := 0; attempt < 2; attempt++ {
+		var r mediaRef
+		if err := json.Unmarshal([]byte(ref), &r); err != nil || r.ID == 0 {
+			return errors.New("у сообщения нет фото")
+		}
+		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+			return err
+		}
+		tmp := path + ".part"
+		_, err = downloader.NewDownloader().Download(api, &tg.InputPhotoFileLocation{
+			ID: r.ID, AccessHash: r.Hash, FileReference: r.Ref, ThumbSize: r.Size,
+		}).ToPath(ctx, tmp)
+		if err == nil {
+			return os.Rename(tmp, path)
+		}
+		_ = os.Remove(tmp)
+		if attempt > 0 || !tgerr.Is(err, "FILE_REFERENCE_EXPIRED", "FILE_REFERENCE_INVALID") {
+			return humanErr(err)
+		}
+		fresh, ferr := c.refetch(ctx, api, chat, int(m.MsgID))
+		if ferr != nil {
+			return ferr
+		}
+		newRef, ok := photoRef(fresh)
+		if !ok {
+			return errors.New("фото больше недоступно в Telegram")
+		}
+		ref = newRef
+		_ = c.st.SetMediaRef(ctx, m.ID, ref)
+	}
+	return nil
+}
+
+func (c *Client) refetch(ctx context.Context, api *tg.Client, chat store.Chat, msgID int) (*tg.Message, error) {
+	ids := []tg.InputMessageClass{&tg.InputMessageID{ID: msgID}}
+	var res tg.MessagesMessagesClass
+	var err error
+	if chat.Kind == "channel" {
+		res, err = api.ChannelsGetMessages(ctx, &tg.ChannelsGetMessagesRequest{
+			Channel: &tg.InputChannel{ChannelID: chat.PeerID, AccessHash: chat.AccessHash}, ID: ids,
+		})
+	} else {
+		res, err = api.MessagesGetMessages(ctx, ids)
+	}
+	if err != nil {
+		return nil, humanErr(err)
+	}
+	if mod, ok := res.AsModified(); ok {
+		for _, mc := range mod.GetMessages() {
+			if m, ok := mc.(*tg.Message); ok && m.ID == msgID {
+				return m, nil
+			}
+		}
+	}
+	return nil, errors.New("сообщение удалено в Telegram")
 }
