@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"math/rand"
 	"net/http"
 	"os"
@@ -18,6 +19,7 @@ import (
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 
 	"sinaps-crm/internal/config"
+	"sinaps-crm/internal/dataio"
 	"sinaps-crm/internal/plugins"
 	"sinaps-crm/internal/store"
 	"sinaps-crm/internal/telegram"
@@ -53,7 +55,9 @@ func (a *App) startup(ctx context.Context) {
 	a.dataDir = filepath.Join(base, "SINAPS-CRM")
 	_ = os.MkdirAll(a.dataDir, 0o700)
 
-	a.st, err = store.Open(filepath.Join(a.dataDir, "crm.db"))
+	dbPath := filepath.Join(a.dataDir, "crm.db")
+	applyPendingRestore(dbPath)
+	a.st, err = store.Open(dbPath)
 	if err != nil {
 		runtime.MessageDialog(ctx, runtime.MessageDialogOptions{
 			Type: runtime.ErrorDialog, Title: "База данных", Message: err.Error(),
@@ -753,3 +757,136 @@ func safeName(n string) string {
 	}
 	return n
 }
+
+// ---------- экспорт / импорт ----------
+
+var exportFormats = map[string]struct{ ext, name, pattern string }{
+	"csv":    {".csv", "CSV (Excel, Google Таблицы)", "*.csv"},
+	"xlsx":   {".xlsx", "Excel", "*.xlsx"},
+	"sqlite": {".db", "База SQLite", "*.db;*.sqlite"},
+}
+
+type ExportResult struct {
+	Path  string `json:"path"`
+	Count int    `json:"count"`
+}
+
+// ExportData спрашивает, куда сохранить, и выгружает. Пустой Path — пользователь отменил.
+func (a *App) ExportData(format string) (ExportResult, error) {
+	f, ok := exportFormats[format]
+	if !ok {
+		return ExportResult{}, fmt.Errorf("неизвестный формат %q", format)
+	}
+	home, _ := os.UserHomeDir()
+	path, err := runtime.SaveFileDialog(a.ctx, runtime.SaveDialogOptions{
+		Title:            "Экспорт SINAPS CRM",
+		DefaultDirectory: home,
+		DefaultFilename:  "sinaps-crm-" + time.Now().Format("2006-01-02") + f.ext,
+		Filters:          []runtime.FileFilter{{DisplayName: f.name, Pattern: f.pattern}},
+	})
+	if err != nil || path == "" {
+		return ExportResult{}, err
+	}
+	if filepath.Ext(path) == "" {
+		path += f.ext
+	}
+	n := 0
+	switch format {
+	case "csv":
+		n, err = dataio.ExportCSV(a.ctx, a.st, path)
+	case "xlsx":
+		n, err = dataio.ExportXLSX(a.ctx, a.st, path)
+	case "sqlite":
+		err = dataio.ExportSQLite(a.ctx, a.st, path)
+	}
+	return ExportResult{Path: path, Count: n}, err
+}
+
+// PickImportFile — выбор файла для импорта. Пустая строка — отмена.
+func (a *App) PickImportFile() (string, error) {
+	return runtime.OpenFileDialog(a.ctx, runtime.OpenDialogOptions{
+		Title: "Импорт в SINAPS CRM",
+		Filters: []runtime.FileFilter{
+			{DisplayName: "Таблицы и базы (*.csv, *.xlsx, *.db)", Pattern: "*.csv;*.xlsx;*.xlsm;*.db;*.sqlite;*.sqlite3"},
+		},
+	})
+}
+
+// PreviewImport показывает, что изменится. Ничего не записывает.
+func (a *App) PreviewImport(path string) (dataio.Preview, error) {
+	k, err := dataio.Kind(path)
+	if err != nil {
+		return dataio.Preview{}, err
+	}
+	if k == "sqlite" {
+		return dataio.PreviewSQLite(path)
+	}
+	return dataio.PreviewTable(a.ctx, a.st, path)
+}
+
+// ImportTable добавляет/обновляет клиентов из CSV или Excel.
+func (a *App) ImportTable(path string) (dataio.Result, error) {
+	res, err := dataio.ApplyTable(a.ctx, a.st, path)
+	a.emit("chats:changed", nil)
+	return res, err
+}
+
+// RestoreDatabase заменяет базу файлом SQLite. Текущая база сохраняется
+// как crm.db.bak-<дата>; замена происходит при перезапуске приложения.
+func (a *App) RestoreDatabase(path string) error {
+	if _, _, err := store.ValidateDB(path); err != nil {
+		return err
+	}
+	dbPath := filepath.Join(a.dataDir, "crm.db")
+	if err := copyFile(path, dbPath+".restore"); err != nil {
+		return err
+	}
+	exe, err := os.Executable()
+	if err == nil {
+		_ = exec.Command(exe).Start()
+	}
+	runtime.Quit(a.ctx)
+	return nil
+}
+
+// applyPendingRestore выполняется до открытия базы: подменяет её восстановленной.
+func applyPendingRestore(dbPath string) {
+	restore := dbPath + ".restore"
+	if _, err := os.Stat(restore); err != nil {
+		return
+	}
+	bak := dbPath + ".bak-" + time.Now().Format("20060102-150405")
+	if _, err := os.Stat(dbPath); err == nil {
+		if err := os.Rename(dbPath, bak); err != nil {
+			return // не трогаем ничего, если не удалось сохранить текущую базу
+		}
+		for _, sfx := range []string{"-wal", "-shm"} {
+			_ = os.Rename(dbPath+sfx, bak+sfx)
+		}
+	}
+	_ = os.Rename(restore, dbPath)
+}
+
+func copyFile(src, dst string) error {
+	in, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+	tmp := dst + ".tmp"
+	out, err := os.Create(tmp)
+	if err != nil {
+		return err
+	}
+	if _, err := io.Copy(out, in); err != nil {
+		out.Close()
+		return err
+	}
+	if err := out.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmp, dst)
+}
+
+// ShowInFolder открывает папку с файлом.
+func (a *App) ShowInFolder(path string) error { return openPath(filepath.Dir(path)) }

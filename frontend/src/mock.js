@@ -130,6 +130,12 @@ export const mock = {
     messages[chatId] = messages[chatId].filter((m) => m.msgId !== msgId)
     emit('message:deleted', { chatId, removed: [msgId], marked: [] }); emit('chats:changed')
   },
+  ExportData: async (fmt) => { await wait(500); return { path: '/home/timur/sinaps-crm-2026-11-01.' + (fmt === 'sqlite' ? 'db' : fmt), count: chats.length } },
+  PickImportFile: async () => '/home/timur/Загрузки/лиды-2гис.xlsx',
+  PreviewImport: async (path) => { await wait(400); return { kind: 'table', file: path.split('/').pop(), rows: 42, create: 39, update: 3, skip: 0, problems: ['строка 17: неизвестный этап «думает» — этап не изменится'], sample: [['Стоматология «Дента»', 'Новые', '', 'новый'], ['Фитнес-клуб Pulse', 'Сделка', '60000', 'обновить'], ['Барбершоп Top Gun', 'Новые', '', 'новый']] } },
+  ImportTable: async () => { await wait(700); return { created: 39, updated: 3, skipped: 0, problems: [] } },
+  RestoreDatabase: async () => {},
+  ShowInFolder: async () => {},
   PickFile: async () => (Math.random() > 0.5 ? '/home/timur/Документы/КП SINAPS.pdf' : '/home/timur/Изображения/скрин.png'),
   FileInfo: async (path) => { const name = path.split('/').pop(); return { path, name, size: name.endsWith('.pdf') ? 2_450_000 : 830_000, isImage: /\.(png|jpe?g|webp)$/i.test(name), tooBig: false } },
   SendFile: async (chatId, path, caption, asPhoto) => {

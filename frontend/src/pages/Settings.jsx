@@ -5,6 +5,7 @@ import { Icon } from '../components/ui.jsx'
 const TABS = [
   { id: 'appearance', label: 'Внешний вид' },
   { id: 'sync', label: 'Синхронизация' },
+  { id: 'data', label: 'Данные' },
   { id: 'plugins', label: 'Плагины' },
 ]
 
@@ -28,6 +29,7 @@ export default function Settings({ settings, reloadSettings, toast }) {
       <div className="narrow" style={{ margin: 0, display: 'flex', flexDirection: 'column', gap: 20 }}>
         {tab === 'appearance' && <Appearance toast={toast} />}
         {tab === 'sync' && <Sync settings={settings} reloadSettings={reloadSettings} toast={toast} />}
+        {tab === 'data' && <DataIO toast={toast} />}
         {tab === 'plugins' && <Plugins toast={toast} />}
       </div>
     </div>
@@ -175,5 +177,143 @@ function Plugins({ toast }) {
         </div>
       )}
     </section>
+  )
+}
+
+const EXPORTS = [
+  { id: 'xlsx', title: 'Excel (.xlsx)', text: 'Клиенты и вся переписка на двух листах. Фильтры, суммы считаются.', icon: 'file' },
+  { id: 'csv', title: 'CSV (.csv)', text: 'Только клиенты. Открывается в Excel, Google Таблицах, любой CRM.', icon: 'file' },
+  { id: 'sqlite', title: 'Копия базы (.db)', text: 'Полный бэкап: клиенты, переписка, история. Для восстановления.', icon: 'folder' },
+]
+
+function DataIO({ toast }) {
+  const [busy, setBusy] = useState('')
+  const [preview, setPreview] = useState(null) // { path, ...Preview }
+  const [result, setResult] = useState(null)
+
+  async function doExport(fmt) {
+    setBusy(fmt)
+    try {
+      const r = await api.exportData(fmt)
+      if (r.path) {
+        toast(`Сохранено${r.count ? `: ${r.count} клиентов` : ''} → ${r.path.split(/[\\/]/).pop()}`)
+        setResult({ kind: 'export', path: r.path })
+      }
+    } catch (e) { toast(errText(e), 'err') } finally { setBusy('') }
+  }
+
+  async function pick() {
+    setResult(null)
+    try {
+      const path = await api.pickImportFile()
+      if (!path) return
+      setBusy('preview')
+      const p = await api.previewImport(path)
+      setPreview({ ...p, path })
+    } catch (e) { toast(errText(e), 'err') } finally { setBusy('') }
+  }
+
+  async function apply() {
+    const p = preview
+    if (p.kind === 'sqlite') {
+      if (!window.confirm(`Заменить всю базу CRM файлом «${p.file}» (${p.chats} клиентов, ${p.messages} сообщений)? Текущая база сохранится рядом как резервная копия crm.db.bak-<дата>. Приложение перезапустится.`)) return
+      setBusy('import')
+      try { await api.restoreDatabase(p.path) } catch (e) { toast(errText(e), 'err'); setBusy('') }
+      return
+    }
+    setBusy('import')
+    try {
+      const r = await api.importTable(p.path)
+      setPreview(null)
+      setResult({ kind: 'import', ...r })
+      toast(`Импорт: новых ${r.created}, обновлено ${r.updated}${r.skipped ? `, пропущено ${r.skipped}` : ''}`)
+    } catch (e) { toast(errText(e), 'err') } finally { setBusy('') }
+  }
+
+  return (
+    <>
+      <section className="panel">
+        <h2>Экспорт</h2>
+        <div className="io-grid">
+          {EXPORTS.map((x) => (
+            <button key={x.id} type="button" className="io-card" disabled={!!busy} onClick={() => doExport(x.id)}>
+              <span className="io-ico"><Icon name={x.icon} size={20} /></span>
+              <span className="io-title">{busy === x.id ? 'Сохраняем…' : x.title}</span>
+              <span className="hint" style={{ fontSize: 13 }}>{x.text}</span>
+            </button>
+          ))}
+        </div>
+        {result?.kind === 'export' && (
+          <div className="row" style={{ justifyContent: 'space-between' }}>
+            <p className="hint mono" style={{ fontSize: 12, wordBreak: 'break-all' }}>{result.path}</p>
+            <button type="button" className="btn btn-sm" onClick={() => api.showInFolder(result.path)}><Icon name="folder" size={16} /> Показать в папке</button>
+          </div>
+        )}
+      </section>
+
+      <section className="panel">
+        <h2>Импорт</h2>
+        <p className="hint">
+          <b>CSV или Excel</b> — клиенты добавятся или обновятся. Совпадение ищется по ID канала, телефону, @username или точному названию;
+          новые попадут в «Новые» с отметкой «Из файла». Нужна колонка «Название» (или «Имя»/«Телефон»); также понимаю «Этап», «Сумма», «Теги», «Заметка», «Следующий шаг».
+          <br /><b>Копия базы .db</b> — заменяет всю базу (текущая сохраняется резервной копией).
+        </p>
+        <button type="button" className="btn" style={{ alignSelf: 'flex-start' }} disabled={!!busy} onClick={pick}>
+          <Icon name="clip" size={16} /> {busy === 'preview' ? 'Читаем файл…' : 'Выбрать файл…'}
+        </button>
+
+        {result?.kind === 'import' && (
+          <div className="io-result">
+            Новых: <b>{result.created}</b> · обновлено: <b>{result.updated}</b>{result.skipped ? <> · пропущено: <b>{result.skipped}</b></> : null}
+            {result.problems?.length > 0 && <ul>{result.problems.map((p, i) => <li key={i}>{p}</li>)}</ul>}
+          </div>
+        )}
+      </section>
+
+      {preview && (
+        <div className="modal-back" onMouseDown={(e) => e.target === e.currentTarget && setPreview(null)}>
+          <div className="modal" role="dialog" aria-modal="true" aria-labelledby="imp-title">
+            <div className="modal-head">
+              <div>
+                <h2 id="imp-title">Импорт «{preview.file}»</h2>
+                <p className="hint" style={{ marginTop: 4 }}>Пока ничего не изменено. Проверьте и подтвердите.</p>
+              </div>
+              <button type="button" className="icon-btn" aria-label="Закрыть" onClick={() => setPreview(null)}><Icon name="close" /></button>
+            </div>
+
+            {preview.kind === 'sqlite' ? (
+              <div className="io-result">
+                В файле: <b>{preview.chats}</b> клиентов, <b>{preview.messages}</b> сообщений.<br />
+                Текущая база будет <b>заменена целиком</b>. Перед заменой она сохранится как <span className="mono">crm.db.bak-&lt;дата&gt;</span>, приложение перезапустится.
+              </div>
+            ) : (
+              <>
+                <div className="stats">
+                  <div className="stat" style={{ padding: '12px 16px', flex: '1 1 110px' }}><div className="stat-label">Строк</div><div className="stat-value" style={{ fontSize: 22 }}>{preview.rows}</div></div>
+                  <div className="stat" style={{ padding: '12px 16px', flex: '1 1 110px' }}><div className="stat-label">Новых</div><div className="stat-value" style={{ fontSize: 22, color: 'var(--accent-text)' }}>{preview.create}</div></div>
+                  <div className="stat" style={{ padding: '12px 16px', flex: '1 1 110px' }}><div className="stat-label">Обновить</div><div className="stat-value" style={{ fontSize: 22 }}>{preview.update}</div></div>
+                  {preview.skip > 0 && <div className="stat" style={{ padding: '12px 16px', flex: '1 1 110px' }}><div className="stat-label">Пропуск</div><div className="stat-value" style={{ fontSize: 22 }}>{preview.skip}</div></div>}
+                </div>
+                {preview.sample.length > 0 && (
+                  <table className="io-table">
+                    <thead><tr><th>Клиент</th><th>Этап</th><th>Сумма</th><th>Действие</th></tr></thead>
+                    <tbody>{preview.sample.map((r, i) => <tr key={i}>{r.map((c, j) => <td key={j}>{c || '—'}</td>)}</tr>)}</tbody>
+                  </table>
+                )}
+                {preview.problems.length > 0 && <ul className="io-problems">{preview.problems.map((p, i) => <li key={i}>{p}</li>)}</ul>}
+                <p className="hint" style={{ fontSize: 13 }}>Пустые ячейки не стирают данные в CRM. Telegram не затрагивается.</p>
+              </>
+            )}
+
+            <div className="row" style={{ justifyContent: 'flex-end' }}>
+              <button type="button" className="btn" onClick={() => setPreview(null)}>Отмена</button>
+              <button type="button" className={'btn ' + (preview.kind === 'sqlite' ? 'btn-danger' : 'btn-primary')} disabled={busy === 'import' || (preview.kind === 'table' && preview.create + preview.update === 0)} onClick={apply}>
+                {busy === 'import' ? 'Импортируем…' : preview.kind === 'sqlite' ? 'Заменить базу' : `Импортировать ${preview.create + preview.update}`}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </>
   )
 }

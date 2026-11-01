@@ -90,6 +90,7 @@ function Thread({ id, toast, tg, onDeleted }) {
 
   if (!view) return <div className="empty">Загрузка…</div>
   const c = view.chat
+  const canSend = tg.state === 'ready' && c.channel === 'tg' // лиды из файла пока без мессенджера
 
   async function pickPath(path, count = 1) {
     if (!path) return
@@ -138,7 +139,7 @@ function Thread({ id, toast, tg, onDeleted }) {
   return (
     <>
       <section className={'thread' + (dragOver ? ' drag-over' : '')} style={{ '--wails-drop-target': 'drop' }}
-        onDragEnter={(e) => { e.preventDefault(); if (tg.state === 'ready') setDragOver(true) }}
+        onDragEnter={(e) => { e.preventDefault(); if (canSend) setDragOver(true) }}
         onDragOver={(e) => e.preventDefault()}
         onDragLeave={(e) => { if (!e.currentTarget.contains(e.relatedTarget)) setDragOver(false) }}
         onDrop={(e) => { e.preventDefault(); setDragOver(false) }}>
@@ -171,7 +172,7 @@ function Thread({ id, toast, tg, onDeleted }) {
                     {m.deleted && <span className="deleted-tag">удалено клиентом · </span>}
                     {clock(m.date)}
                   </div>
-                  {m.out && tg.state === 'ready' && (
+                  {m.out && canSend && (
                     <button type="button" className="msg-del" aria-label="Удалить сообщение у всех" onClick={() => removeMsg(m)}>
                       <Icon name="trash" size={14} />
                     </button>
@@ -215,16 +216,16 @@ function Thread({ id, toast, tg, onDeleted }) {
 
         <div className="composer">
           <button type="button" className="icon-btn" style={{ height: 52, width: 52, borderRadius: 14, flexShrink: 0 }}
-            aria-label="Прикрепить файл" title="Прикрепить файл (до 1,5 ГБ)" onClick={chooseFile} disabled={sending || tg.state !== 'ready'}>
+            aria-label="Прикрепить файл" title="Прикрепить файл (до 1,5 ГБ)" onClick={chooseFile} disabled={sending || !canSend}>
             <Icon name="clip" size={20} />
           </button>
           <label style={{ flex: 1 }} className="field">
-            <span>{tg.state === 'ready' ? (attach ? 'Подпись к файлу · Ctrl+Enter — отправить' : 'Ответ уйдёт в Telegram · Ctrl+Enter — отправить · файл можно перетащить') : 'Telegram не подключён'}</span>
+            <span>{canSend ? (attach ? 'Подпись к файлу · Ctrl+Enter — отправить' : 'Ответ уйдёт в Telegram · Ctrl+Enter — отправить · файл можно перетащить') : c.channel === 'manual' ? 'Лид из файла — у него нет чата в мессенджере' : 'Telegram не подключён'}</span>
             <textarea className="textarea" rows={2} placeholder={attach ? 'Подпись (необязательно)…' : 'Написать сообщение…'} value={text}
               onChange={(e) => setText(e.target.value)}
               onKeyDown={(e) => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); send() } }} />
           </label>
-          <button type="button" className="send-btn" aria-label="Отправить" onClick={send} disabled={sending || (!text.trim() && !attach) || tg.state !== 'ready'}>
+          <button type="button" className="send-btn" aria-label="Отправить" onClick={send} disabled={sending || (!text.trim() && !attach) || !canSend}>
             <Icon name="arrow" size={20} />
           </button>
         </div>

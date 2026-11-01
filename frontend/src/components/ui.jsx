@@ -53,5 +53,6 @@ export function MailIcon({ size = 15 }) {
 export function ChannelChip({ channel }) {
   if (channel === 'wa') return <span className="chip chip-wa">WhatsApp</span>
   if (channel === 'mail') return <span className="chip chip-mail">Gmail</span>
+  if (channel === 'manual') return <span className="chip chip-muted">Из файла</span>
   return <span className="chip chip-tg">Telegram</span>
 }

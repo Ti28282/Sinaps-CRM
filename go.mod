@@ -5,6 +5,8 @@ go 1.25.0
 require (
 	github.com/gotd/td v0.120.0
 	github.com/wailsapp/wails/v2 v2.17.0
+	github.com/xuri/excelize/v2 v2.9.1
+	golang.org/x/text v0.39.0
 	modernc.org/sqlite v1.37.0
 )
 
@@ -62,7 +64,6 @@ require (
 	golang.org/x/net v0.56.0 // indirect
 	golang.org/x/sync v0.21.0 // indirect
 	golang.org/x/sys v0.46.0 // indirect
-	golang.org/x/text v0.39.0 // indirect
 	golang.org/x/tools v0.47.0 // indirect
 	gopkg.in/yaml.v2 v2.4.0 // indirect
 	modernc.org/libc v1.62.1 // indirect

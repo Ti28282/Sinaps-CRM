@@ -10,10 +10,13 @@ package store
 
 import (
 	"context"
+	crand "crypto/rand"
 	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -213,6 +216,180 @@ func (s *Store) migrate() error {
 }
 
 func (s *Store) Close() error { return s.db.Close() }
+
+// ---------- резервные копии и импорт ----------
+
+// BackupTo делает целостную копию базы одним файлом (VACUUM INTO).
+func (s *Store) BackupTo(ctx context.Context, path string) error {
+	_ = os.Remove(path) // VACUUM INTO не перезаписывает существующий файл
+	_, err := s.db.ExecContext(ctx, `VACUUM INTO ?`, path)
+	return err
+}
+
+// ValidateDB проверяет, что файл — база SINAPS CRM, а не произвольный SQLite.
+func ValidateDB(path string) (chats, messages int, err error) {
+	db, err := sql.Open("sqlite", "file:"+path+"?mode=ro")
+	if err != nil {
+		return 0, 0, err
+	}
+	defer db.Close()
+	if err = db.QueryRow(`SELECT COUNT(*) FROM chats`).Scan(&chats); err != nil {
+		return 0, 0, errors.New("в файле нет таблицы клиентов — это не база SINAPS CRM")
+	}
+	if err = db.QueryRow(`SELECT COUNT(*) FROM messages`).Scan(&messages); err != nil {
+		return 0, 0, errors.New("в файле нет таблицы сообщений — это не база SINAPS CRM")
+	}
+	return chats, messages, nil
+}
+
+// EachMessage обходит все сообщения (для выгрузки в Excel).
+func (s *Store) EachMessage(ctx context.Context, fn func(chatTitle string, m Message) error) error {
+	rows, err := s.db.QueryContext(ctx, `SELECT c.title, m.id, m.chat_id, m.msg_id, m.out, m.text, m.date, m.media_kind, m.media_ref, m.deleted
+FROM messages m JOIN chats c ON c.id = m.chat_id ORDER BY c.title, m.date, m.msg_id`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var title string
+		var m Message
+		var o, d int
+		if err := rows.Scan(&title, &m.ID, &m.ChatID, &m.MsgID, &o, &m.Text, &m.Date, &m.MediaKind, &m.MediaRef, &d); err != nil {
+			return err
+		}
+		m.Out, m.Deleted = o == 1, d == 1
+		m.FillFile()
+		if err := fn(title, m); err != nil {
+			return err
+		}
+	}
+	return rows.Err()
+}
+
+// ImportRow — клиент из CSV/Excel. Пустые поля не перезаписывают существующие.
+type ImportRow struct {
+	Channel  string
+	ExtID    string
+	Title    string
+	Username string
+	Phone    string
+	Stage    string
+	Amount   *int64
+	NextStep string
+	Note     string
+	Tags     string
+}
+
+// FindImportTarget ищет, какого клиента обновит строка: по каналу+ID,
+// иначе по телефону или @username, иначе по точному названию. 0 — будет создан новый.
+func (s *Store) FindImportTarget(ctx context.Context, r ImportRow) int64 {
+	var id int64
+	if r.Channel != "" && r.ExtID != "" {
+		if s.db.QueryRowContext(ctx, `SELECT id FROM chats WHERE channel=? AND ext_id=?`, r.Channel, r.ExtID).Scan(&id) == nil {
+			return id
+		}
+	}
+	if p := digits(r.Phone); len(p) >= 7 {
+		if s.db.QueryRowContext(ctx, `SELECT id FROM chats WHERE phone<>'' AND replace(replace(replace(replace(phone,'+',''),' ',''),'-',''),'(','') LIKE ? LIMIT 1`, "%"+p).Scan(&id) == nil {
+			return id
+		}
+	}
+	if u := strings.TrimPrefix(strings.TrimSpace(r.Username), "@"); u != "" {
+		if s.db.QueryRowContext(ctx, `SELECT id FROM chats WHERE lower(username)=lower(?) LIMIT 1`, u).Scan(&id) == nil {
+			return id
+		}
+	}
+	if t := strings.TrimSpace(r.Title); t != "" {
+		if s.db.QueryRowContext(ctx, `SELECT id FROM chats WHERE title=? LIMIT 1`, t).Scan(&id) == nil {
+			return id
+		}
+	}
+	return 0
+}
+
+// ApplyImport обновляет найденного клиента или создаёт новый лид (канал manual).
+func (s *Store) ApplyImport(ctx context.Context, r ImportRow) (created bool, err error) {
+	id := s.FindImportTarget(ctx, r)
+	if id == 0 {
+		if strings.TrimSpace(r.Title) == "" {
+			return false, errors.New("нет названия клиента")
+		}
+		now := time.Now().Unix()
+		ext := "m" + strconv.FormatInt(now, 36) + strconv.FormatInt(int64(len(r.Title))+int64(len(r.Phone)), 36) + randSuffix()
+		err = s.db.QueryRowContext(ctx, `INSERT INTO chats(channel,ext_id,kind,peer_id,title,username,phone,last_at,created_at,updated_at)
+VALUES('manual',?,'contact',0,?,?,?,?,?,?) RETURNING id`,
+			ext, strings.TrimSpace(r.Title), strings.TrimPrefix(strings.TrimSpace(r.Username), "@"), strings.TrimSpace(r.Phone), now, now, now).Scan(&id)
+		if err != nil {
+			return false, err
+		}
+		created = true
+		_ = s.AddEvent(ctx, id, "import", "Импортирован из файла")
+	} else {
+		// контактные данные дополняем, только если их не было
+		_, err = s.db.ExecContext(ctx, `UPDATE chats SET
+  phone    = CASE WHEN phone=''    THEN ? ELSE phone END,
+  username = CASE WHEN username='' THEN ? ELSE username END
+WHERE id=?`, strings.TrimSpace(r.Phone), strings.TrimPrefix(strings.TrimSpace(r.Username), "@"), id)
+		if err != nil {
+			return false, err
+		}
+	}
+	p := ChatPatch{}
+	if r.Stage != "" {
+		p.Stage = &r.Stage
+	}
+	p.Amount = r.Amount
+	if r.NextStep != "" {
+		p.NextStep = &r.NextStep
+	}
+	if r.Note != "" {
+		p.Note = &r.Note
+	}
+	if r.Tags != "" {
+		p.Tags = &r.Tags
+	}
+	return created, s.PatchChat(ctx, id, p)
+}
+
+// ParseStage понимает и id этапа, и русское название.
+func ParseStage(v string) (string, bool) {
+	v = strings.ToLower(strings.TrimSpace(v))
+	if v == "" {
+		return "", true
+	}
+	for _, st := range Stages {
+		if v == st || v == strings.ToLower(StageName(st)) {
+			return st, true
+		}
+	}
+	switch v {
+	case "новый", "новая", "new lead":
+		return "new", true
+	case "ответила":
+		return "replied", true
+	case "won", "сделки":
+		return "deal", true
+	case "потеряна", "отказ":
+		return "lost", true
+	}
+	return "", false
+}
+
+func digits(s string) string {
+	b := make([]byte, 0, len(s))
+	for i := 0; i < len(s); i++ {
+		if s[i] >= '0' && s[i] <= '9' {
+			b = append(b, s[i])
+		}
+	}
+	return string(b)
+}
+
+func randSuffix() string {
+	var b [4]byte
+	_, _ = crand.Read(b[:])
+	return fmt.Sprintf("%x", b)
+}
 
 // ---------- settings ----------
 

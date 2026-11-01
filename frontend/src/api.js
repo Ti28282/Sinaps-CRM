@@ -26,6 +26,12 @@ export const api = {
   plugins: () => call('ListPlugins'),
   setPluginEnabled: (id, on) => call('SetPluginEnabled', id, on),
   savePluginSettings: (id, settings) => call('SavePluginSettings', id, settings),
+  exportData: (format) => call('ExportData', format),
+  pickImportFile: () => call('PickImportFile'),
+  previewImport: (path) => call('PreviewImport', path),
+  importTable: (path) => call('ImportTable', path),
+  restoreDatabase: (path) => call('RestoreDatabase', path),
+  showInFolder: (path) => call('ShowInFolder', path),
 
   tgStatus: () => call('TgStatus'),
   tgSaveKeys: (id, hash) => call('TgSaveKeys', Number(id) || 0, hash),
