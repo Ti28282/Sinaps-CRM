@@ -63,6 +63,7 @@ CREATE TABLE IF NOT EXISTS messages(
   media_kind TEXT NOT NULL DEFAULT '',     -- photo | …
   media_ref  TEXT NOT NULL DEFAULT '',     -- JSON: как скачать файл из Telegram
   deleted    INTEGER NOT NULL DEFAULT 0,   -- клиент удалил у себя — у нас остаётся
+  ext_msg_id TEXT NOT NULL DEFAULT '',     -- строковый ID сообщения (WhatsApp)
   UNIQUE(chat_id, msg_id)
 );
 CREATE INDEX IF NOT EXISTS idx_messages_chat_date ON messages(chat_id, date);
@@ -84,6 +85,25 @@ CREATE TABLE IF NOT EXISTS hidden_chats(
   title   TEXT NOT NULL DEFAULT '',
   at      INTEGER NOT NULL,
   PRIMARY KEY(channel, ext_id)
+);
+
+-- WhatsApp: все личные чаты, о которых знаем (для окна выбора клиентов),
+-- и история, присланная телефоном при подключении (подтягивается при выборе чата).
+CREATE TABLE IF NOT EXISTS wa_chats(
+  jid      TEXT PRIMARY KEY,
+  name     TEXT NOT NULL DEFAULT '',
+  last_at  INTEGER NOT NULL DEFAULT 0,
+  last_msg TEXT NOT NULL DEFAULT ''
+);
+CREATE TABLE IF NOT EXISTS wa_history(
+  jid        TEXT NOT NULL,
+  ext_msg_id TEXT NOT NULL,
+  out        INTEGER NOT NULL,
+  text       TEXT NOT NULL,
+  date       INTEGER NOT NULL,
+  media_kind TEXT NOT NULL DEFAULT '',
+  media_ref  TEXT NOT NULL DEFAULT '',
+  PRIMARY KEY(jid, ext_msg_id)
 );
 
 CREATE TABLE IF NOT EXISTS sends(
@@ -133,6 +153,7 @@ type Message struct {
 	Deleted   bool   `json:"deleted"`
 	FileName  string `json:"fileName,omitempty"`
 	FileSize  int64  `json:"fileSize,omitempty"`
+	ExtMsgID  string `json:"-"`
 }
 
 // FillFile достаёт имя и размер файла из media_ref для показа в переписке.
@@ -205,6 +226,7 @@ func (s *Store) migrate() error {
 		{"media_kind", `ALTER TABLE messages ADD COLUMN media_kind TEXT NOT NULL DEFAULT ''`},
 		{"media_ref", `ALTER TABLE messages ADD COLUMN media_ref TEXT NOT NULL DEFAULT ''`},
 		{"deleted", `ALTER TABLE messages ADD COLUMN deleted INTEGER NOT NULL DEFAULT 0`},
+		{"ext_msg_id", `ALTER TABLE messages ADD COLUMN ext_msg_id TEXT NOT NULL DEFAULT ''`},
 	} {
 		if !cols[c.name] {
 			if _, err := s.db.Exec(c.ddl); err != nil {
@@ -610,9 +632,9 @@ func (s *Store) DeleteChat(ctx context.Context, id int64) error {
 // live=true — сообщение пришло в реальном времени (не из импорта истории).
 func (s *Store) AddMessage(ctx context.Context, m Message, live bool) (inserted bool, err error) {
 	res, err := s.db.ExecContext(ctx,
-		`INSERT INTO messages(chat_id,msg_id,out,text,date,media_kind,media_ref) VALUES(?,?,?,?,?,?,?)
+		`INSERT INTO messages(chat_id,msg_id,out,text,date,media_kind,media_ref,ext_msg_id) VALUES(?,?,?,?,?,?,?,?)
 		 ON CONFLICT(chat_id,msg_id) DO NOTHING`,
-		m.ChatID, m.MsgID, b2i(m.Out), m.Text, m.Date, m.MediaKind, m.MediaRef)
+		m.ChatID, m.MsgID, b2i(m.Out), m.Text, m.Date, m.MediaKind, m.MediaRef, m.ExtMsgID)
 	if err != nil {
 		return false, err
 	}
@@ -672,12 +694,12 @@ SELECT `+msgCols+` FROM (
 	return out, rows.Err()
 }
 
-const msgCols = `id,chat_id,msg_id,out,text,date,media_kind,media_ref,deleted`
+const msgCols = `id,chat_id,msg_id,out,text,date,media_kind,media_ref,deleted,ext_msg_id`
 
 func scanMsg(r interface{ Scan(...any) error }) (Message, error) {
 	var m Message
 	var o, d int
-	err := r.Scan(&m.ID, &m.ChatID, &m.MsgID, &o, &m.Text, &m.Date, &m.MediaKind, &m.MediaRef, &d)
+	err := r.Scan(&m.ID, &m.ChatID, &m.MsgID, &o, &m.Text, &m.Date, &m.MediaKind, &m.MediaRef, &d, &m.ExtMsgID)
 	m.Out, m.Deleted = o == 1, d == 1
 	m.FillFile()
 	return m, err
@@ -942,4 +964,105 @@ func b2i(b bool) int {
 		return 1
 	}
 	return 0
+}
+
+// ---------- WhatsApp: кэш чатов и истории ----------
+
+// MsgIDFromExt — числовой ID для строкового ID сообщения (уникальность внутри чата).
+func MsgIDFromExt(ext string) int64 {
+	var h uint64 = 14695981039346656037
+	for i := 0; i < len(ext); i++ {
+		h ^= uint64(ext[i])
+		h *= 1099511628211
+	}
+	return int64(h >> 1)
+}
+
+type WAKnown struct {
+	JID     string `json:"jid"`
+	Name    string `json:"name"`
+	LastAt  int64  `json:"lastAt"`
+	LastMsg string `json:"lastMsg"`
+}
+
+// WAUpsertKnown запоминает чат: имя не затирается пустым, дата — только вперёд.
+func (s *Store) WAUpsertKnown(ctx context.Context, k WAKnown) error {
+	_, err := s.db.ExecContext(ctx, `INSERT INTO wa_chats(jid,name,last_at,last_msg) VALUES(?,?,?,?)
+ON CONFLICT(jid) DO UPDATE SET
+  name     = CASE WHEN excluded.name<>'' THEN excluded.name ELSE wa_chats.name END,
+  last_msg = CASE WHEN excluded.last_at>=wa_chats.last_at AND excluded.last_msg<>'' THEN excluded.last_msg ELSE wa_chats.last_msg END,
+  last_at  = MAX(wa_chats.last_at, excluded.last_at)`, k.JID, k.Name, k.LastAt, preview(k.LastMsg))
+	return err
+}
+
+func (s *Store) WAKnownChats(ctx context.Context) ([]WAKnown, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT jid,name,last_at,last_msg FROM wa_chats ORDER BY last_at DESC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []WAKnown{}
+	for rows.Next() {
+		var k WAKnown
+		if err := rows.Scan(&k.JID, &k.Name, &k.LastAt, &k.LastMsg); err != nil {
+			return nil, err
+		}
+		out = append(out, k)
+	}
+	return out, rows.Err()
+}
+
+// WACacheHistory сохраняет сообщения истории (без дублей) до выбора чата.
+func (s *Store) WACacheHistory(ctx context.Context, jid string, msgs []Message) error {
+	for _, m := range msgs {
+		if _, err := s.db.ExecContext(ctx, `INSERT INTO wa_history(jid,ext_msg_id,out,text,date,media_kind,media_ref)
+VALUES(?,?,?,?,?,?,?) ON CONFLICT(jid,ext_msg_id) DO NOTHING`,
+			jid, m.ExtMsgID, b2i(m.Out), m.Text, m.Date, m.MediaKind, m.MediaRef); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// WAHistory — последние limit сообщений из кэша истории для чата.
+func (s *Store) WAHistory(ctx context.Context, jid string, limit int) ([]Message, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT ext_msg_id,out,text,date,media_kind,media_ref FROM wa_history
+WHERE jid=? ORDER BY date DESC LIMIT ?`, jid, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Message
+	for rows.Next() {
+		var m Message
+		var o int
+		if err := rows.Scan(&m.ExtMsgID, &o, &m.Text, &m.Date, &m.MediaKind, &m.MediaRef); err != nil {
+			return nil, err
+		}
+		m.Out = o == 1
+		m.MsgID = MsgIDFromExt(m.ExtMsgID)
+		out = append(out, m)
+	}
+	return out, rows.Err()
+}
+
+// ApplyExtDelete: сообщение удалили в мессенджере. Своё — убираем, чужое — помечаем.
+func (s *Store) ApplyExtDelete(ctx context.Context, chatID int64, ext string) (DeleteResult, error) {
+	r := DeleteResult{ChatID: chatID, Removed: []int64{}, Marked: []int64{}}
+	m, err := s.MessageByMsg(ctx, chatID, MsgIDFromExt(ext))
+	if err != nil {
+		return r, nil // такого сообщения у нас нет
+	}
+	if m.Out {
+		if _, err := s.db.ExecContext(ctx, `DELETE FROM messages WHERE id=?`, m.ID); err != nil {
+			return r, err
+		}
+		r.Removed = append(r.Removed, m.MsgID)
+		return r, s.refreshLast(ctx, chatID)
+	}
+	if _, err := s.db.ExecContext(ctx, `UPDATE messages SET deleted=1 WHERE id=?`, m.ID); err != nil {
+		return r, err
+	}
+	r.Marked = append(r.Marked, m.MsgID)
+	return r, nil
 }

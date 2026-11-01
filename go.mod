@@ -1,11 +1,13 @@
 module sinaps-crm
 
-go 1.25.0
+go 1.26.0
 
 require (
 	github.com/gotd/td v0.120.0
 	github.com/wailsapp/wails/v2 v2.17.0
 	github.com/xuri/excelize/v2 v2.9.1
+	go.mau.fi/whatsmeow v0.0.0-20261031222104-5d4657a5c29e
+	google.golang.org/protobuf v1.36.12
 	golang.org/x/text v0.39.0
 	modernc.org/sqlite v1.37.0
 )

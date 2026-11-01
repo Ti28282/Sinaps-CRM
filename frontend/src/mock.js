@@ -43,6 +43,14 @@ const events = {}
 let savedTheme = 'dark'
 try { savedTheme = localStorage.getItem('sinaps-theme') || 'dark' } catch {}
 const hiddenExt = new Set()
+let waStatus = { state: 'off' }
+const setWa = (s) => { waStatus = s; emit('wa:status', s) }
+const waKnown = [
+  { jid: '79161234567@s.whatsapp.net', name: 'Салон Lumière', lastAt: now - 2 * h, lastMsg: 'Здравствуйте! Сколько стоит бот для записи?' },
+  { jid: '79035550011@s.whatsapp.net', name: 'Мама', lastAt: now - 5 * h, lastMsg: 'Позвони вечером' },
+  { jid: '77017778899@s.whatsapp.net', name: 'Автосервис «Мотор»', lastAt: now - 30 * h, lastMsg: 'Пришлите, пожалуйста, КП' },
+  { jid: '996700123456@s.whatsapp.net', name: 'Азамат', lastAt: now - 60 * h, lastMsg: 'Ок, спасибо' },
+]
 const appConfig = { theme: savedTheme, plugins: {} }
 
 const find = (id) => chats.find((c) => c.id === id)
@@ -63,6 +71,26 @@ export const mock = {
   ListPlugins: async () => [],
   SetPluginEnabled: async () => { throw new Error('плагин не найден') },
   SavePluginSettings: async () => {},
+  WaStatus: async () => waStatus,
+  WaConnect: async () => {
+    setWa({ state: 'connecting' }); await wait(600)
+    setWa({ state: 'need_qr', qr: '2@demo,' + Date.now() })
+    setTimeout(() => { if (waStatus.state === 'need_qr') { setWa({ state: 'ready', name: 'Тимур', phone: '+996555000111', known: 0, syncing: true }); setTimeout(() => { setWa({ ...waStatus, syncing: false, known: waKnown.length }); emit('wa:known') }, 1500) } }, 6000)
+  },
+  WaLogout: async () => setWa({ state: 'off' }),
+  WaKnownChats: async () => waKnown.map((k) => ({ ...k, inCrm: chats.some((c) => c.channel === 'wa' && c.extId === k.jid), hidden: false })),
+  WaAddChats: async (jids) => {
+    let n = 0
+    jids.forEach((jid) => {
+      const k = waKnown.find((x) => x.jid === jid); if (!k || chats.some((c) => c.extId === jid)) return
+      const id = Math.max(...chats.map((c) => c.id)) + 1
+      chats.push({ id, channel: 'wa', extId: jid, kind: 'user', title: k.name, username: '', phone: jid.split('@')[0], stage: 'new', amount: 0, nextStep: '', note: '', tags: '', unread: false, lastMsg: k.lastMsg, lastAt: k.lastAt, lastOut: false, createdAt: k.lastAt })
+      messages[id] = [{ id: ++nextMsg, chatId: id, msgId: nextMsg, out: false, text: k.lastMsg, date: k.lastAt }]
+      n++
+    })
+    emit('chats:changed'); return { added: n, messages: n }
+  },
+  WaHideChats: async (m) => { Object.keys(m).forEach((e) => { const i = chats.findIndex((c) => c.extId === e); if (i >= 0) chats.splice(i, 1) }); emit('chats:changed'); return Object.keys(m).length },
   TgStatus: async () => status,
   TgSaveKeys: async (id) => { settings.tgApiId = id; settings.hasApiHash = true; setStatus({ state: 'connecting' }); await wait(600); setStatus({ state: 'need_phone' }) },
   TgSendCode: async (phone) => { await wait(); setStatus({ state: 'need_code', phone, codeVia: 'app', nextVia: 'sms', timeout: 30 }) },

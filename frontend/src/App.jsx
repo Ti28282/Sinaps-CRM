@@ -20,6 +20,7 @@ export default function App() {
   const [openChat, setOpenChat] = useState(null)
   const [chats, setChats] = useState([])
   const [tg, setTg] = useState({ state: 'no_keys' })
+  const [wa, setWa] = useState({ state: 'off' })
   const [settings, setSettings] = useState(null)
   const [toasts, setToasts] = useState([])
   const tid = useRef(0)
@@ -45,8 +46,10 @@ export default function App() {
     reload()
     reloadSettings()
     api.tgStatus().then(setTg)
+    api.waStatus().then(setWa)
     const offs = [
       on('tg:status', setTg),
+      on('wa:status', setWa),
       on('chats:changed', reload),
       on('sync:warn', (m) => toast(m, 'err')),
       on('sync:done', (r) => r?.newMessages && toast(`Подтянуто новых сообщений: ${r.newMessages}`)),
@@ -96,12 +99,16 @@ export default function App() {
             <span className="dot" role="img" aria-label={tg.state === 'ready' ? 'Подключён' : 'Не подключён'}
               style={{ background: tg.state === 'ready' ? 'var(--accent)' : 'var(--off)' }} />
           </div>
-          <div className="source soon">
+          <div className="source">
             <div className="source-ico" style={{ background: 'var(--wa)' }}><WaIcon /></div>
-            <div>
+            <div style={{ minWidth: 0 }}>
               <div className="source-name">WhatsApp</div>
-              <div className="source-sub">Скоро</div>
+              <div className="source-sub">
+                {wa.state === 'ready' ? `${chats.filter((c) => c.channel === 'wa').length} чатов` : wa.state === 'need_qr' ? 'Ждёт QR' : wa.state === 'connecting' ? 'Подключение…' : 'Не подключён'}
+              </div>
             </div>
+            <span className="dot" role="img" aria-label={wa.state === 'ready' ? 'Подключён' : 'Не подключён'}
+              style={{ background: wa.state === 'ready' ? 'var(--accent)' : 'var(--off)' }} />
           </div>
           <div className="source soon">
             <div className="source-ico" style={{ background: 'var(--mail)' }}><MailIcon /></div>
@@ -115,10 +122,10 @@ export default function App() {
 
       <main className="main">
         {page === 'pipeline' && <Pipeline chats={chats} tg={tg} toast={toast} openChat={(id) => go('chats', id)} />}
-        {page === 'chats' && <Chats chats={chats} openId={openChat} setOpenId={setOpenChat} toast={toast} tg={tg} />}
+        {page === 'chats' && <Chats chats={chats} openId={openChat} setOpenId={setOpenChat} toast={toast} tg={tg} wa={wa} />}
         {page === 'broadcast' && <Broadcast chats={chats} settings={settings} reloadSettings={reloadSettings} tg={tg} toast={toast} />}
         {page === 'settings' && <Settings settings={settings} reloadSettings={reloadSettings} toast={toast} />}
-        {page === 'connect' && <Connect tg={tg} settings={settings} reloadSettings={reloadSettings} toast={toast} done={() => go('pipeline')} />}
+        {page === 'connect' && <Connect tg={tg} wa={wa} settings={settings} reloadSettings={reloadSettings} toast={toast} done={() => go('pipeline')} />}
       </main>
 
       <div className="toasts" aria-live="polite">

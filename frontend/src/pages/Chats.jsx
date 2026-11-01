@@ -2,7 +2,7 @@ import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
 import { api, on, STAGES, errText, when, clock, dayLabel } from '../api.js'
 import { Avatar, ChannelChip, Icon } from '../components/ui.jsx'
 
-export default function Chats({ chats, openId, setOpenId, toast, tg }) {
+export default function Chats({ chats, openId, setOpenId, toast, tg, wa }) {
   const [q, setQ] = useState('')
   const list = useMemo(() => {
     const s = q.trim().toLowerCase()
@@ -40,14 +40,14 @@ export default function Chats({ chats, openId, setOpenId, toast, tg }) {
           {list.length === 0 && <div style={{ padding: 20, color: 'var(--faint)', fontSize: 13 }}>Ничего не найдено</div>}
         </div>
       </aside>
-      {openId ? <Thread key={openId} id={openId} toast={toast} tg={tg} onDeleted={() => setOpenId(null)} /> : (
+      {openId ? <Thread key={openId} id={openId} toast={toast} tg={tg} wa={wa} onDeleted={() => setOpenId(null)} /> : (
         <div className="empty"><div><Icon name="chat" size={36} /><h3>Нет диалогов</h3><p>Подключите Telegram и выберите папку с клиентами.</p></div></div>
       )}
     </div>
   )
 }
 
-function Thread({ id, toast, tg, onDeleted }) {
+function Thread({ id, toast, tg, wa, onDeleted }) {
   const [view, setView] = useState(null)
   const [text, setText] = useState('')
   const [sending, setSending] = useState(false)
@@ -90,7 +90,8 @@ function Thread({ id, toast, tg, onDeleted }) {
 
   if (!view) return <div className="empty">Загрузка…</div>
   const c = view.chat
-  const canSend = tg.state === 'ready' && c.channel === 'tg' // лиды из файла пока без мессенджера
+  const net = c.channel === 'wa' ? { name: 'WhatsApp', ready: wa?.state === 'ready' } : { name: 'Telegram', ready: tg.state === 'ready' }
+  const canSend = c.channel !== 'manual' && net.ready // лиды из файла — без мессенджера
 
   async function pickPath(path, count = 1) {
     if (!path) return
@@ -220,7 +221,7 @@ function Thread({ id, toast, tg, onDeleted }) {
             <Icon name="clip" size={20} />
           </button>
           <label style={{ flex: 1 }} className="field">
-            <span>{canSend ? (attach ? 'Подпись к файлу · Ctrl+Enter — отправить' : 'Ответ уйдёт в Telegram · Ctrl+Enter — отправить · файл можно перетащить') : c.channel === 'manual' ? 'Лид из файла — у него нет чата в мессенджере' : 'Telegram не подключён'}</span>
+            <span>{canSend ? (attach ? 'Подпись к файлу · Ctrl+Enter — отправить' : `Ответ уйдёт в ${net.name} · Ctrl+Enter — отправить · файл можно перетащить`) : c.channel === 'manual' ? 'Лид из файла — у него нет чата в мессенджере' : `${net.name} не подключён`}</span>
             <textarea className="textarea" rows={2} placeholder={attach ? 'Подпись (необязательно)…' : 'Написать сообщение…'} value={text}
               onChange={(e) => setText(e.target.value)}
               onKeyDown={(e) => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); send() } }} />

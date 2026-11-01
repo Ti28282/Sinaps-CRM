@@ -23,6 +23,7 @@ import (
 	"sinaps-crm/internal/plugins"
 	"sinaps-crm/internal/store"
 	"sinaps-crm/internal/telegram"
+	"sinaps-crm/internal/whatsapp"
 )
 
 const version = "0.1.0"
@@ -34,6 +35,7 @@ type App struct {
 	dataDir string
 	st      *store.Store
 	tg      *telegram.Client
+	wa      *whatsapp.Client
 	cfg     *config.Store
 
 	autoOnce sync.Once
@@ -66,6 +68,10 @@ func (a *App) startup(ctx context.Context) {
 		return
 	}
 	a.tg = telegram.New(a.st, a.dataDir, a.emit)
+	a.wa = whatsapp.New(a.st, a.dataDir, a.emit)
+	if a.wa.HasSession() { // подключались раньше — восстанавливаем без QR
+		go func() { _ = a.wa.Start(ctx) }()
+	}
 
 	if a.cfg, err = config.Load(a.dataDir); err != nil {
 		a.cfg, _ = config.Load(os.TempDir()) // крайний случай: настройки не сохранятся между запусками
@@ -91,6 +97,9 @@ func (a *App) shutdown(ctx context.Context) {
 	a.stopPlugins()
 	if a.tg != nil {
 		a.tg.Stop()
+	}
+	if a.wa != nil {
+		a.wa.Stop()
 	}
 	if a.st != nil {
 		_ = a.st.Close()
@@ -340,7 +349,7 @@ func (a *App) SendMessage(id int64, text string) error {
 	if err != nil {
 		return err
 	}
-	if err := a.tg.Send(a.ctx, c, text); err != nil {
+	if err := a.sendText(c, text); err != nil {
 		return err
 	}
 	_ = a.st.LogSend(a.ctx, id, "reply")
@@ -360,6 +369,9 @@ func (a *App) DeleteMessage(chatID, msgID int64) error {
 	c, err := a.st.Chat(a.ctx, chatID)
 	if err != nil {
 		return err
+	}
+	if c.Channel == "wa" {
+		return a.wa.DeleteMessage(a.ctx, c, msgID)
 	}
 	return a.tg.DeleteMessage(a.ctx, c, msgID)
 }
@@ -401,7 +413,7 @@ func (a *App) mediaHandler() http.Handler {
 			}
 			ctx, cancel := context.WithTimeout(a.ctx, 60*time.Second)
 			defer cancel()
-			if err := a.tg.DownloadMedia(ctx, c, m, path); err != nil {
+			if err := a.downloadMedia(ctx, c, m, path); err != nil {
 				http.Error(w, err.Error(), http.StatusBadGateway)
 				return
 			}
@@ -703,7 +715,11 @@ func (a *App) SendFile(chatID int64, path, caption string, asPhoto bool) error {
 		return err
 	}
 	last := time.Time{}
-	err = a.tg.SendFile(a.ctx, c, path, caption, asPhoto, func(done, total int64) {
+	send := a.tg.SendFile
+	if c.Channel == "wa" {
+		send = a.wa.SendFile
+	}
+	err = send(a.ctx, c, path, caption, asPhoto, func(done, total int64) {
 		if time.Since(last) > 150*time.Millisecond || done == total {
 			last = time.Now()
 			runtime.EventsEmit(a.ctx, "upload:progress", map[string]any{"chatId": chatID, "done": done, "total": total})
@@ -737,7 +753,7 @@ func (a *App) OpenAttachment(chatID, msgID int64) error {
 	if _, err := os.Stat(path); err != nil {
 		ctx, cancel := context.WithTimeout(a.ctx, 30*time.Minute)
 		defer cancel()
-		if err := a.tg.DownloadMedia(ctx, c, m, path); err != nil {
+		if err := a.downloadMedia(ctx, c, m, path); err != nil {
 			return err
 		}
 	}
@@ -890,3 +906,52 @@ func copyFile(src, dst string) error {
 
 // ShowInFolder открывает папку с файлом.
 func (a *App) ShowInFolder(path string) error { return openPath(filepath.Dir(path)) }
+
+// ---------- маршрутизация по каналу ----------
+
+func (a *App) sendText(c store.Chat, text string) error {
+	switch c.Channel {
+	case "wa":
+		return a.wa.Send(a.ctx, c, text)
+	case "tg":
+		return a.tg.Send(a.ctx, c, text)
+	}
+	return errors.New("у этого клиента нет чата в мессенджере")
+}
+
+func (a *App) downloadMedia(ctx context.Context, c store.Chat, m store.Message, path string) error {
+	if c.Channel == "wa" {
+		return a.wa.DownloadMedia(ctx, m, path)
+	}
+	return a.tg.DownloadMedia(ctx, c, m, path)
+}
+
+// ---------- WhatsApp ----------
+
+func (a *App) WaStatus() whatsapp.Status { return a.wa.Status() }
+
+// WaConnect — подключиться (покажет QR, если входа ещё не было).
+func (a *App) WaConnect() error { return a.wa.Start(a.ctx) }
+
+// WaLogout — отвязать устройство. Переписка в CRM остаётся.
+func (a *App) WaLogout() error { return a.wa.Logout(a.ctx) }
+
+func (a *App) WaKnownChats() ([]whatsapp.KnownChat, error) { return a.wa.KnownChats(a.ctx) }
+
+type WaAddResult struct {
+	Added    int `json:"added"`
+	Messages int `json:"messages"`
+}
+
+// WaAddChats — добавить выбранные чаты WhatsApp в CRM (WhatsApp не меняется).
+func (a *App) WaAddChats(jids []string) (WaAddResult, error) {
+	n, m, err := a.wa.AddChats(a.ctx, jids)
+	return WaAddResult{Added: n, Messages: m}, err
+}
+
+// WaHideChats — убрать чаты WhatsApp из CRM.
+func (a *App) WaHideChats(chats map[string]string) (int, error) {
+	n, err := a.st.HideChats(a.ctx, "wa", chats)
+	a.emit("chats:changed", nil)
+	return n, err
+}

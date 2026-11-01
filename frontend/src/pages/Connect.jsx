@@ -14,7 +14,7 @@ const STATE_LABEL = {
   error: ['Ошибка', 'chip-muted'],
 }
 
-export default function Connect({ tg, settings, reloadSettings, toast, done }) {
+export default function Connect({ tg, wa, settings, reloadSettings, toast, done }) {
   const [label, cls] = STATE_LABEL[tg.state] || STATE_LABEL.no_keys
   return (
     <div className="page">
@@ -23,7 +23,7 @@ export default function Connect({ tg, settings, reloadSettings, toast, done }) {
           <div className="eyebrow" style={{ color: 'var(--accent-text)' }}>Подключения</div>
           <h1 style={{ margin: '10px 0 0', fontSize: 34, fontWeight: 600, letterSpacing: '-.02em' }}>Подключите каналы связи</h1>
           <p className="hint" style={{ marginTop: 10, maxWidth: 620, fontSize: 15 }}>
-            CRM забирает только чаты из выбранной папки. Личные переписки не трогаются, база хранится у вас на компьютере.
+            CRM берёт только выбранное: папку Telegram и отмеченные вручную чаты WhatsApp. Личные переписки не попадают, база хранится у вас на компьютере.
           </p>
         </div>
 
@@ -41,20 +41,7 @@ export default function Connect({ tg, settings, reloadSettings, toast, done }) {
             <TgFlow tg={tg} settings={settings} reloadSettings={reloadSettings} toast={toast} done={done} />
           </section>
 
-          <section className="panel soon">
-            <div className="panel-head">
-              <div className="panel-ico" style={{ background: 'var(--wa)' }}><WaIcon size={22} /></div>
-              <div>
-                <h2>WhatsApp</h2>
-                <div className="hint">Вход по QR · следующий этап</div>
-              </div>
-              <span className="chip chip-muted" style={{ marginLeft: 'auto' }}>Скоро</span>
-            </div>
-            <p className="hint">
-              Подключим через whatsmeow (протокол WhatsApp Web). Чаты попадут в ту же воронку и не будут дублироваться.
-              Чтобы не рисковать основным номером, лучше завести отдельный.
-            </p>
-          </section>
+          <WaPanel wa={wa} toast={toast} />
 
           <section className="panel soon">
             <div className="panel-head">
@@ -384,6 +371,174 @@ function FolderClean({ folder, toast, close, onDone }) {
               <button type="button" className="btn btn-primary" disabled={busy || toHide.length === 0} onClick={hide}>
                 {busy ? 'Сохраняем…' : `Убрать из CRM ${toHide.length || ''}`}
               </button>
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  )
+}
+
+
+const WA_LABEL = {
+  off: ['Не подключён', 'chip-muted'], connecting: ['Подключение…', 'chip-muted'],
+  need_qr: ['Сканируйте QR', 'chip-muted'], ready: ['Подключён', 'chip-ok'], error: ['Ошибка', 'chip-muted'],
+}
+
+function WaPanel({ wa, toast }) {
+  const [img, setImg] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [picker, setPicker] = useState(false)
+  const [label, cls] = WA_LABEL[wa.state] || WA_LABEL.off
+
+  useEffect(() => {
+    if (!wa.qr) return setImg('')
+    QRCode.toDataURL(wa.qr, { width: 440, margin: 1, color: { dark: '#0D0E11', light: '#ECEDEF' } }).then(setImg)
+  }, [wa.qr])
+
+  const run = async (fn) => { setBusy(true); try { await fn() } catch (e) { toast(errText(e), 'err') } finally { setBusy(false) } }
+
+  return (
+    <section className="panel">
+      <div className="panel-head">
+        <div className="panel-ico" style={{ background: 'var(--wa)' }}><WaIcon size={22} /></div>
+        <div>
+          <h2>WhatsApp</h2>
+          <div className="hint">Связанное устройство, вход по QR</div>
+        </div>
+        <span className={'chip ' + cls} style={{ marginLeft: 'auto' }}>{label}</span>
+      </div>
+      {wa.error && <p className="hint" style={{ color: 'var(--danger)' }}>{wa.error}</p>}
+
+      {(wa.state === 'off' || wa.state === 'error') && (
+        <>
+          <p className="hint">
+            CRM станет «связанным устройством», как WhatsApp Web. Сообщения уходят только по кнопке «Отправить»,
+            «прочитано» не ставится, рассылок через WhatsApp нет. Подключение неофициальное — риск блокировки номера ваш.
+          </p>
+          <button type="button" className="btn btn-primary" style={{ alignSelf: 'flex-start' }} disabled={busy} onClick={() => run(api.waConnect)}>Подключить по QR</button>
+        </>
+      )}
+
+      {wa.state === 'connecting' && <p className="hint">Соединяемся с WhatsApp…</p>}
+
+      {wa.state === 'need_qr' && (
+        <div className="row" style={{ gap: 24, alignItems: 'center' }}>
+          <div style={{ width: 220, height: 220, borderRadius: 18, background: '#ECEDEF', padding: 10, flexShrink: 0 }}>
+            {img && <img src={img} alt="QR-код для входа в WhatsApp" style={{ width: '100%', height: '100%', display: 'block' }} />}
+          </div>
+          <div className="field" style={{ flex: '1 1 200px', gap: 14 }}>
+            <ol style={{ margin: 0, paddingLeft: 18, display: 'flex', flexDirection: 'column', gap: 8, lineHeight: 1.5, color: 'var(--text-2)' }}>
+              <li>Откройте WhatsApp на телефоне с нужным номером</li>
+              <li>Настройки → Связанные устройства → Привязка устройства</li>
+              <li>Наведите камеру на код</li>
+            </ol>
+            <p className="hint">Код обновляется сам.</p>
+            <button type="button" className="btn" style={{ alignSelf: 'flex-start' }} onClick={() => run(api.waLogout)}>Отмена</button>
+          </div>
+        </div>
+      )}
+
+      {wa.state === 'ready' && (
+        <>
+          <div className="account">
+            <div className="avatar" style={{ width: 36, height: 36, background: '#7FE0AE', fontSize: 13 }}>{(wa.name || '?')[0]}</div>
+            <div>
+              <div style={{ fontWeight: 600 }}>{wa.name || 'WhatsApp'} <span className="hint mono" style={{ fontSize: 12 }}>{wa.phone}</span></div>
+              <div className="hint" style={{ fontSize: 12 }}>{wa.syncing ? 'Телефон присылает историю чатов…' : `Известно личных чатов: ${wa.known}`}</div>
+            </div>
+            <button type="button" className="btn btn-sm" style={{ marginLeft: 'auto' }} disabled={busy}
+              onClick={() => window.confirm('Отвязать CRM от WhatsApp? Переписка в CRM останется.') && run(api.waLogout)}>Отвязать</button>
+          </div>
+          <button type="button" className="btn btn-primary" style={{ alignSelf: 'flex-start' }} onClick={() => setPicker(true)}>
+            Выбрать чаты клиентов <Icon name="arrow" size={16} />
+          </button>
+          {wa.known === 0 && !wa.syncing && <p className="hint">Чаты появятся, когда телефон пришлёт историю (обычно 1–2 минуты после первого входа) или когда кто-то напишет.</p>}
+        </>
+      )}
+
+      {picker && <WaPicker toast={toast} close={() => setPicker(false)} />}
+    </section>
+  )
+}
+
+// Выбор чатов WhatsApp для CRM. Меняется только CRM, в WhatsApp ничего не происходит.
+function WaPicker({ toast, close }) {
+  const [list, setList] = useState(null)
+  const [picked, setPicked] = useState(new Set())
+  const [q, setQ] = useState('')
+  const [busy, setBusy] = useState(false)
+
+  const load = () => api.waKnownChats().then(setList).catch((e) => toast(errText(e), 'err'))
+  useEffect(() => {
+    load()
+    const off = on('wa:known', load)
+    const onKey = (e) => e.key === 'Escape' && close()
+    window.addEventListener('keydown', onKey)
+    return () => { off && off(); window.removeEventListener('keydown', onKey) }
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+
+  const s = q.trim().toLowerCase()
+  const visible = (list || []).filter((c) => !s || (c.name + ' ' + c.jid).toLowerCase().includes(s))
+  const toggle = (id) => setPicked((p) => { const n = new Set(p); n.has(id) ? n.delete(id) : n.add(id); return n })
+  const sel = (list || []).filter((c) => picked.has(c.jid))
+  const toAdd = sel.filter((c) => !c.inCrm)
+  const toRemove = sel.filter((c) => c.inCrm)
+
+  async function add() {
+    setBusy(true)
+    try {
+      const r = await api.waAddChats(toAdd.map((c) => c.jid))
+      toast(`Добавлено в CRM: ${toAdd.length}, сообщений из истории: ${r.messages}`)
+      setPicked(new Set()); load()
+    } catch (e) { toast(errText(e), 'err') } finally { setBusy(false) }
+  }
+  async function remove() {
+    if (!window.confirm(`Убрать ${toRemove.length} чатов из CRM? В WhatsApp ничего не изменится.`)) return
+    setBusy(true)
+    try {
+      await api.waHideChats(Object.fromEntries(toRemove.map((c) => [c.jid, c.name])))
+      toast(`Убрано из CRM: ${toRemove.length}`)
+      setPicked(new Set()); load()
+    } catch (e) { toast(errText(e), 'err') } finally { setBusy(false) }
+  }
+
+  return (
+    <div className="modal-back" onMouseDown={(e) => e.target === e.currentTarget && close()}>
+      <div className="modal" role="dialog" aria-modal="true" aria-labelledby="wa-title">
+        <div className="modal-head">
+          <div>
+            <h2 id="wa-title">Чаты WhatsApp в CRM</h2>
+            <p className="hint" style={{ marginTop: 4 }}>Отметьте клиентов. Меняется только CRM — в WhatsApp ничего не происходит.</p>
+          </div>
+          <button type="button" className="icon-btn" aria-label="Закрыть" onClick={close}><Icon name="close" /></button>
+        </div>
+        {!list ? <p className="hint">Загружаем…</p> : (
+          <>
+            <label className="search" style={{ width: '100%' }}>
+              <Icon name="search" size={16} />
+              <span className="sr">Поиск по чатам WhatsApp</span>
+              <input type="search" placeholder="Имя или номер" value={q} onChange={(e) => setQ(e.target.value)} />
+            </label>
+            <div className="recipients" style={{ maxHeight: 380 }}>
+              {visible.map((c) => (
+                <label key={c.jid} className="recipient">
+                  <input type="checkbox" checked={picked.has(c.jid)} onChange={() => toggle(c.jid)} />
+                  <span style={{ minWidth: 0, flex: 1 }}>
+                    <span style={{ display: 'block', fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.name}</span>
+                    <span className="hint" style={{ display: 'block', fontSize: 12, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      +{c.jid.split('@')[0]}{c.lastMsg ? ` · ${c.lastMsg}` : ''}
+                    </span>
+                  </span>
+                  {c.inCrm ? <span className="chip chip-ok">в CRM</span> : c.hidden ? <span className="chip chip-muted">скрыт</span> : null}
+                </label>
+              ))}
+              {visible.length === 0 && <p className="hint" style={{ padding: 10 }}>{list.length ? 'Ничего не найдено' : 'Пока нет чатов — подождите, пока телефон пришлёт историю'}</p>}
+            </div>
+            <div className="row" style={{ justifyContent: 'flex-end' }}>
+              <button type="button" className="btn" onClick={close}>Закрыть</button>
+              {toRemove.length > 0 && <button type="button" className="btn" disabled={busy} onClick={remove}>Убрать из CRM {toRemove.length}</button>}
+              <button type="button" className="btn btn-primary" disabled={busy || toAdd.length === 0} onClick={add}>Добавить в CRM {toAdd.length || ''}</button>
             </div>
           </>
         )}
