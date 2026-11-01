@@ -240,6 +240,7 @@ function Folders({ tg, settings, reloadSettings, toast, done }) {
         <legend className="eyebrow" style={{ marginBottom: 10 }}>Папка с клиентами</legend>
         {!folders && <p className="hint">Загружаем папки…</p>}
         {folders?.length === 0 && <p className="hint">Папок нет. Создайте в Telegram папку «clients» и добавьте туда чаты клиентов.</p>}
+        <div className="folder-list">
         {folders?.map((f) => (
           <div key={f.id} className="folder-row">
             <button type="button" className="option" aria-pressed={f.id === sel} onClick={() => setSel(f.id)}>
@@ -253,6 +254,7 @@ function Folders({ tg, settings, reloadSettings, toast, done }) {
             </button>
           </div>
         ))}
+        </div>
       </fieldset>
 
       {progress && (
