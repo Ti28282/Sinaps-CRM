@@ -113,6 +113,33 @@ CREATE TABLE IF NOT EXISTS sends(
   at      INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_sends_at ON sends(kind, at);
+
+-- сообщения, убранные из CRM (в мессенджере могли остаться): синхронизация их не возвращает.
+CREATE TABLE IF NOT EXISTS hidden_messages(
+  chat_id INTEGER NOT NULL,
+  msg_id  INTEGER NOT NULL,
+  at      INTEGER NOT NULL,
+  PRIMARY KEY(chat_id, msg_id)
+);
+
+-- плагин «Чеки»: файлы клиентов, отмеченные как чек. Без внешнего ключа на chats —
+-- деньги не должны пропадать, если клиента убрали из CRM; название клиента копируется.
+CREATE TABLE IF NOT EXISTS receipts(
+  id         INTEGER PRIMARY KEY,
+  chat_id    INTEGER NOT NULL,
+  msg_id     INTEGER NOT NULL,
+  chat_title TEXT    NOT NULL DEFAULT '',
+  channel    TEXT    NOT NULL DEFAULT '',
+  file_name  TEXT    NOT NULL DEFAULT '',
+  amount     INTEGER NOT NULL DEFAULT 0,
+  currency   TEXT    NOT NULL DEFAULT '₽',
+  status     TEXT    NOT NULL DEFAULT 'paid',   -- paid | wait | refund
+  what       TEXT    NOT NULL DEFAULT '',
+  paid_at    INTEGER NOT NULL,
+  created_at INTEGER NOT NULL,
+  UNIQUE(chat_id, msg_id)
+);
+CREATE INDEX IF NOT EXISTS idx_receipts_paid ON receipts(paid_at);
 `
 
 var Stages = []string{"new", "sent", "replied", "deal", "lost"}
@@ -631,6 +658,10 @@ func (s *Store) DeleteChat(ctx context.Context, id int64) error {
 // AddMessage вставляет сообщение без дублей. inserted=false — такое уже было.
 // live=true — сообщение пришло в реальном времени (не из импорта истории).
 func (s *Store) AddMessage(ctx context.Context, m Message, live bool) (inserted bool, err error) {
+	var hidden int
+	if s.db.QueryRowContext(ctx, `SELECT 1 FROM hidden_messages WHERE chat_id=? AND msg_id=?`, m.ChatID, m.MsgID).Scan(&hidden) == nil {
+		return false, nil // пользователь убрал это сообщение из CRM
+	}
 	res, err := s.db.ExecContext(ctx,
 		`INSERT INTO messages(chat_id,msg_id,out,text,date,media_kind,media_ref,ext_msg_id) VALUES(?,?,?,?,?,?,?,?)
 		 ON CONFLICT(chat_id,msg_id) DO NOTHING`,
@@ -799,9 +830,14 @@ WHERE c.channel='tg' AND m.deleted=0 AND `
 	return out, nil
 }
 
-// DeleteOwnMessage — удаление своего сообщения из CRM (в Telegram уже удалено).
-func (s *Store) DeleteOwnMessage(ctx context.Context, chatID, msgID int64) error {
-	if _, err := s.db.ExecContext(ctx, `DELETE FROM messages WHERE chat_id=? AND msg_id=? AND out=1`, chatID, msgID); err != nil {
+// HideMessage убирает сообщение из CRM (своё или клиента) и запоминает,
+// чтобы синхронизация его не вернула. В мессенджере ничего не меняет.
+func (s *Store) HideMessage(ctx context.Context, chatID, msgID int64) error {
+	if _, err := s.db.ExecContext(ctx, `INSERT INTO hidden_messages(chat_id,msg_id,at) VALUES(?,?,?)
+ON CONFLICT(chat_id,msg_id) DO NOTHING`, chatID, msgID, time.Now().Unix()); err != nil {
+		return err
+	}
+	if _, err := s.db.ExecContext(ctx, `DELETE FROM messages WHERE chat_id=? AND msg_id=?`, chatID, msgID); err != nil {
 		return err
 	}
 	return s.refreshLast(ctx, chatID)

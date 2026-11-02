@@ -623,7 +623,7 @@ func (c *Client) DeleteMessage(ctx context.Context, chat store.Chat, msgID int64
 		return errors.New("сообщение не найдено")
 	}
 	if !m.Out {
-		return errors.New("удалять можно только свои сообщения — переписка клиента сохраняется")
+		return errors.New("в WhatsApp у обоих можно удалить только свои сообщения — сообщение клиента можно убрать только из CRM")
 	}
 	if m.ExtMsgID == "" {
 		return errors.New("у сообщения нет ID WhatsApp")
@@ -631,11 +631,10 @@ func (c *Client) DeleteMessage(ctx context.Context, chat store.Chat, msgID int64
 	if _, err := cli.SendMessage(ctx, to, cli.BuildRevoke(to, types.EmptyJID, m.ExtMsgID)); err != nil {
 		return fmt.Errorf("WhatsApp: %w", err)
 	}
-	r, err := c.st.ApplyExtDelete(ctx, chat.ID, m.ExtMsgID)
-	if err != nil {
+	if err := c.st.HideMessage(ctx, chat.ID, msgID); err != nil {
 		return err
 	}
-	c.emit("message:deleted", r)
+	c.emit("message:deleted", store.DeleteResult{ChatID: chat.ID, Removed: []int64{msgID}, Marked: []int64{}})
 	c.emit("chats:changed", nil)
 	return nil
 }

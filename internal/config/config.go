@@ -1,5 +1,5 @@
 // Package config — настройки приложения в config.json рядом с базой.
-// Только то, что относится к самому приложению (тема, плагины);
+// Только то, что относится к самому приложению (тема, плагины, папка плагинов);
 // данные CRM и состояние синхронизации живут в SQLite.
 package config
 
@@ -19,6 +19,8 @@ const (
 type Config struct {
 	Theme   string                  `json:"theme"`
 	Plugins map[string]PluginConfig `json:"plugins"`
+	// PluginsDir — папка с архивами плагинов .sinaps; пусто — <данные>/plugins.
+	PluginsDir string `json:"pluginsDir,omitempty"`
 }
 
 // PluginConfig — включён ли плагин и его собственные настройки.
@@ -63,6 +65,13 @@ func (s *Store) Get() Config {
 	c := s.cfg
 	c.Plugins = make(map[string]PluginConfig, len(s.cfg.Plugins))
 	for k, v := range s.cfg.Plugins {
+		if v.Settings != nil {
+			m := make(map[string]any, len(v.Settings))
+			for sk, sv := range v.Settings {
+				m[sk] = sv
+			}
+			v.Settings = m
+		}
 		c.Plugins[k] = v
 	}
 	return c

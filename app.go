@@ -26,7 +26,7 @@ import (
 	"sinaps-crm/internal/whatsapp"
 )
 
-const version = "0.1.0"
+const version = "0.2.0"
 
 // App — всё, что видит фронт: каждый экспортируемый метод доступен как
 // window.go.main.App.<Method>() и возвращает Promise.
@@ -43,6 +43,9 @@ type App struct {
 	bmu      sync.Mutex
 	bc       broadcastState
 	bcCancel context.CancelFunc
+
+	pmu     sync.RWMutex
+	plugins []plugins.Entry // последнее чтение папки плагинов
 }
 
 func NewApp() *App { return &App{} }
@@ -84,7 +87,7 @@ func (a *App) startup(ctx context.Context) {
 			runtime.EventsEmit(ctx, "files:dropped", paths)
 		}
 	})
-	a.startPlugins()
+	a.loadPlugins()
 
 	// ключи уже сохранены — подключаемся сразу
 	if id, _ := strconv.Atoi(a.st.Get(ctx, "tg_api_id")); id != 0 {
@@ -94,7 +97,6 @@ func (a *App) startup(ctx context.Context) {
 
 func (a *App) shutdown(ctx context.Context) {
 	a.StopBroadcast()
-	a.stopPlugins()
 	if a.tg != nil {
 		a.tg.Stop()
 	}
@@ -299,6 +301,8 @@ type ChatView struct {
 	Chat     store.Chat      `json:"chat"`
 	Messages []store.Message `json:"messages"`
 	Events   []store.Event   `json:"events"`
+	// Receipts — чеки клиента; nil, если плагин «Чеки» выключен.
+	Receipts []store.Receipt `json:"receipts"`
 }
 
 func (a *App) GetChat(id int64) (ChatView, error) {
@@ -311,7 +315,11 @@ func (a *App) GetChat(id int64) (ChatView, error) {
 		return ChatView{}, err
 	}
 	ev, _ := a.st.Events(a.ctx, id)
-	return ChatView{Chat: c, Messages: msgs, Events: ev}, nil
+	v := ChatView{Chat: c, Messages: msgs, Events: ev}
+	if a.pluginActive(chekiID) {
+		v.Receipts, _ = a.st.Receipts(a.ctx, id, 0)
+	}
+	return v, nil
 }
 
 func (a *App) UpdateChat(id int64, p store.ChatPatch) error {
@@ -364,16 +372,34 @@ func (a *App) SendMessage(id int64, text string) error {
 
 func (a *App) Stats() (store.Stats, error) { return a.st.Stats(a.ctx) }
 
-// DeleteMessage — удалить своё сообщение у обоих в Telegram и из CRM.
-func (a *App) DeleteMessage(chatID, msgID int64) error {
+// DeleteMessage — удалить сообщение у обоих в мессенджере и из CRM.
+func (a *App) DeleteMessage(chatID, msgID int64) error { return a.RemoveMessage(chatID, msgID, "all") }
+
+// RemoveMessage удаляет сообщение (своё или клиента).
+//
+//	mode "crm" — только из CRM: в мессенджере остаётся, синхронизация не вернёт;
+//	mode "all" — у обоих в мессенджере. Telegram: в личке можно и сообщение клиента;
+//	WhatsApp: только свои.
+func (a *App) RemoveMessage(chatID, msgID int64, mode string) error {
 	c, err := a.st.Chat(a.ctx, chatID)
 	if err != nil {
 		return err
 	}
-	if c.Channel == "wa" {
-		return a.wa.DeleteMessage(a.ctx, c, msgID)
+	if mode != "all" {
+		if err := a.st.HideMessage(a.ctx, chatID, msgID); err != nil {
+			return err
+		}
+		a.emit("message:deleted", store.DeleteResult{ChatID: chatID, Removed: []int64{msgID}, Marked: []int64{}})
+		a.emit("chats:changed", nil)
+		return nil
 	}
-	return a.tg.DeleteMessage(a.ctx, c, msgID)
+	switch c.Channel {
+	case "wa":
+		return a.wa.DeleteMessage(a.ctx, c, msgID)
+	case "tg":
+		return a.tg.DeleteMessage(a.ctx, c, msgID)
+	}
+	return errors.New("у этого клиента нет чата в мессенджере — можно убрать только из CRM")
 }
 
 // ---------- фото ----------
@@ -606,79 +632,6 @@ func (a *App) applyWindowTheme(theme string) {
 	}
 	runtime.WindowSetBackgroundColour(a.ctx, 13, 14, 17, 255)
 	runtime.WindowSetDarkTheme(a.ctx)
-}
-
-// ---------- плагины (заготовка) ----------
-
-type PluginView struct {
-	plugins.Info
-	Enabled  bool           `json:"enabled"`
-	Settings map[string]any `json:"settings"`
-}
-
-func (a *App) ListPlugins() []PluginView {
-	cfg := a.cfg.Get()
-	out := []PluginView{}
-	for _, info := range plugins.List() {
-		pc := cfg.Plugins[info.ID]
-		if pc.Settings == nil {
-			pc.Settings = map[string]any{}
-		}
-		out = append(out, PluginView{Info: info, Enabled: pc.Enabled, Settings: pc.Settings})
-	}
-	return out
-}
-
-func (a *App) SetPluginEnabled(id string, enabled bool) error {
-	p, ok := plugins.Get(id)
-	if !ok {
-		return fmt.Errorf("плагин %q не найден", id)
-	}
-	cfg, err := a.cfg.Update(func(c *config.Config) {
-		pc := c.Plugins[id]
-		pc.Enabled = enabled
-		c.Plugins[id] = pc
-	})
-	if err != nil {
-		return err
-	}
-	if enabled {
-		return p.Start(a.ctx, cfg.Plugins[id].Settings)
-	}
-	return p.Stop()
-}
-
-func (a *App) SavePluginSettings(id string, settings map[string]any) error {
-	if _, ok := plugins.Get(id); !ok {
-		return fmt.Errorf("плагин %q не найден", id)
-	}
-	_, err := a.cfg.Update(func(c *config.Config) {
-		pc := c.Plugins[id]
-		pc.Settings = settings
-		c.Plugins[id] = pc
-	})
-	return err
-}
-
-func (a *App) startPlugins() {
-	for id, pc := range a.cfg.Get().Plugins {
-		if p, ok := plugins.Get(id); ok && pc.Enabled {
-			if err := p.Start(a.ctx, pc.Settings); err != nil {
-				a.emit("sync:warn", fmt.Sprintf("Плагин %s не запустился: %v", p.Info().Name, err))
-			}
-		}
-	}
-}
-
-func (a *App) stopPlugins() {
-	if a.cfg == nil {
-		return
-	}
-	for id, pc := range a.cfg.Get().Plugins {
-		if p, ok := plugins.Get(id); ok && pc.Enabled {
-			_ = p.Stop()
-		}
-	}
 }
 
 // ---------- файлы ----------

@@ -39,6 +39,8 @@ messages[fp.id].splice(1, 0, { id: 500, chatId: fp.id, msgId: 500, out: false, d
 messages[fp.id][0].deleted = false
 messages[fp.id].push({ id: 502, chatId: fp.id, msgId: 502, out: false, date: fp.lastAt + 60, text: '', mediaKind: 'file', fileName: 'Прайс_абонементы_2026.xlsx', fileSize: 48_300 })
 messages[fp.id].splice(1, 0, { id: 501, chatId: fp.id, msgId: 501, out: false, date: fp.lastAt - 1200, text: 'Ой, не туда отправил', deleted: true })
+const ml = chats.find((c) => c.title.startsWith('Клиника'))
+messages[ml.id].push({ id: 600, chatId: ml.id, msgId: 600, out: false, date: ml.lastAt + 120, text: '', mediaKind: 'file', fileName: 'Платёжное поручение №418.pdf', fileSize: 186_000 })
 const events = {}
 let savedTheme = 'dark'
 try { savedTheme = localStorage.getItem('sinaps-theme') || 'dark' } catch {}
@@ -54,6 +56,62 @@ const waKnown = [
 const appConfig = { theme: savedTheme, plugins: {} }
 
 const find = (id) => chats.find((c) => c.id === id)
+
+// ---- плагины (демо) ----
+const chekiFields = [
+  { key: 'kinds', label: 'Что можно отметить как чек', type: 'select', options: ['PDF и фото', 'Только PDF', 'Любой файл'], default: 'PDF и фото' },
+  { key: 'currency', label: 'Валюта по умолчанию', type: 'select', options: ['₽ рубль', 'сом', '₸ тенге', '$ доллар'], default: '₽ рубль' },
+  { key: 'sumToDeal', label: 'Сумма чеков → «Сумма сделки» клиента', type: 'bool', default: true },
+  { key: 'firstToDeal', label: 'Первый чек переводит клиента в «Сделка»', type: 'bool', default: true },
+]
+const chekiDefaults = Object.fromEntries(chekiFields.map((f) => [f.key, f.default]))
+const pluginSettings = {}
+const demoPlugins = [
+  { file: 'cheki.sinaps', id: 'cheki', name: 'Чеки', version: '0.1', description: 'Отмечайте файлы клиентов как чеки и смотрите статистику оплат', icon: 'receipt', requires: [], fields: chekiFields, enabled: true, base: 'ok' },
+  { file: 'moy-nalog.sinaps', id: 'moy-nalog', name: '«Мой налог»', version: '0.1', description: 'Чек самозанятого по отмеченному чеку', icon: 'puzzle', requires: ['cheki'], fields: [], enabled: false, base: 'error', error: 'Эта версия CRM не умеет запускать плагин «moy-nalog»' },
+  { file: 'old-reports.sinaps', id: 'reports', name: 'Отчёты', version: '0.3', description: '', icon: 'puzzle', requires: [], fields: [], enabled: false, base: 'error', error: 'Нужна CRM v1.4 или новее' },
+  { file: 'photos.sinaps', id: '', name: '', version: '', description: '', icon: '', requires: [], fields: [], enabled: false, base: 'invalid', error: 'В архиве нет manifest.json' },
+]
+function pluginsView() {
+  const on = new Set(demoPlugins.filter((p) => p.base === 'ok' && p.enabled).map((p) => p.id))
+  const items = demoPlugins.map((p) => {
+    const names = p.requires.map((r) => demoPlugins.find((x) => x.id === r)?.name || r)
+    let status = p.base === 'ok' ? (p.enabled ? 'on' : 'off') : p.base
+    let error = p.error || ''
+    if (status === 'on' && p.requires.some((r) => !on.has(r))) { status = 'wait'; error = 'Включите «' + names.join('», «') + '», чтобы плагин заработал' }
+    return { ...p, status, error, requiresNames: names }
+  })
+  return { dir: '~/.config/SINAPS-CRM/plugins', found: items.length, items }
+}
+
+// ---- чеки (демо) ----
+const day = 86400
+const ago = (d) => now - d * day
+let receipts = [
+  [ml.id, 'Клиника «Мед-Лайн»', 'Бот записи · этап 2', 'Платёжное поручение №418.pdf', 'paid', 25000, 3],
+  [fp.id, 'Фитнес-клуб Pulse', 'Бот записи + 1С', 'чек_sber.pdf', 'paid', 60000, 11],
+  [3, 'Автосервис «Гараж 24»', 'Предоплата', 'счёт-оплата.pdf', 'wait', 17500, 30],
+  [4, 'Школа английского Lingvo', 'Бот пробного урока', 'payment.pdf', 'paid', 45000, 44],
+  [ml.id, 'Клиника «Мед-Лайн»', 'Предоплата 50%', 'pp_312.pdf', 'paid', 40000, 50],
+  [fp.id, 'Фитнес-клуб Pulse', 'Аудит и ТЗ', 'чек_0822.pdf', 'paid', 15000, 72],
+  [4, 'Школа английского Lingvo', 'Доработки', 'payment_07.pdf', 'refund', 8000, 95],
+  [6, 'Кофейня «Зерно»', 'Лендинг', 'pp_0611.pdf', 'paid', 32000, 140],
+  [ml.id, 'Клиника «Мед-Лайн»', 'Консультация', 'check.pdf', 'paid', 12000, 200],
+].map(([chatId, chatTitle, what, fileName, status, amount, d], i) => ({ id: i + 1, chatId, msgId: i === 0 ? 600 : 9000 + i, chatTitle, channel: 'tg', what, fileName, status, amount, currency: '₽', paidAt: ago(d), createdAt: ago(d) }))
+const MONTHS = ['янв', 'фев', 'мар', 'апр', 'май', 'июн', 'июл', 'авг', 'сен', 'окт', 'ноя', 'дек']
+function demoReport(chatId, period) {
+  const d = new Date()
+  const from = period === 'all' ? 0 : period === 'quarter' ? new Date(d.getFullYear(), d.getMonth() - 2, 1).getTime() / 1000 : new Date(d.getFullYear(), 0, 1).getTime() / 1000
+  const months = Array.from({ length: 12 }, (_, i) => { const m = new Date(d.getFullYear(), d.getMonth() - 11 + i, 1); return { label: MONTHS[m.getMonth()], sum: 0, key: m.getFullYear() * 12 + m.getMonth() } })
+  const sorted = [...receipts].sort((a, b) => b.paidAt - a.paidAt)
+  const rows = sorted.filter((r) => r.paidAt >= from && (!chatId || r.chatId === chatId))
+  sorted.filter((r) => r.status === 'paid' && (!chatId || r.chatId === chatId)).forEach((r) => { const t = new Date(r.paidAt * 1000); const m = months.find((x) => x.key === t.getFullYear() * 12 + t.getMonth()); if (m) m.sum += r.amount })
+  const paid = rows.filter((r) => r.status === 'paid')
+  const total = paid.reduce((a, r) => a + r.amount, 0)
+  const by = {}; sorted.filter((r) => r.paidAt >= from && r.status === 'paid').forEach((r) => { (by[r.chatId] ||= { chatId: r.chatId, title: r.chatTitle, channel: r.channel, sum: 0 }).sum += r.amount })
+  const cl = {}; sorted.forEach((r) => { cl[r.chatId] ||= { chatId: r.chatId, title: r.chatTitle, channel: r.channel, sum: 0 } })
+  return { rows, total, wait: rows.filter((r) => r.status === 'wait').reduce((a, r) => a + r.amount, 0), avg: paid.length ? Math.round(total / paid.length) : 0, count: rows.length, months, top: Object.values(by).sort((a, b) => b.sum - a.sum).slice(0, 5), clients: Object.values(cl).sort((a, b) => a.title.localeCompare(b.title)), currency: '₽', year: d.getFullYear() }
+}
 const wait = (ms = 250) => new Promise((r) => setTimeout(r, ms))
 let bc = { running: false, total: 0, done: 0, failed: 0, current: '', nextAt: 0, lastError: '' }
 let sentToday = 3
@@ -61,16 +119,39 @@ let settings = { tgApiId: 0, hasApiHash: false, tgFolderId: 0, tgFolderName: '',
 const setStatus = (s) => { status = s; emit('tg:status', s) }
 
 export const mock = {
-  GetInfo: async () => ({ version: '0.1.0-demo', dataDir: '~/.config/SINAPS-CRM' }),
+  GetInfo: async () => ({ version: '0.2.0-demo', dataDir: '~/.config/SINAPS-CRM' }),
   OpenDataDir: async () => {},
   GetSettings: async () => ({ ...settings }),
   SaveSettings: async (p) => { Object.assign(settings, Object.fromEntries(Object.entries(p).filter(([, v]) => v != null))) },
 
   GetConfig: async () => ({ ...appConfig }),
   SetTheme: async (theme) => { appConfig.theme = theme === 'light' ? 'light' : 'dark'; try { localStorage.setItem('sinaps-theme', appConfig.theme) } catch {} ; return { ...appConfig } },
-  ListPlugins: async () => [],
-  SetPluginEnabled: async () => { throw new Error('плагин не найден') },
-  SavePluginSettings: async () => {},
+  Plugins: async () => pluginsView(),
+  SetPluginEnabled: async (id, on) => { const p = demoPlugins.find((x) => x.id === id); if (p) p.enabled = on; const v = pluginsView(); emit('plugins:changed', v); emit('chats:changed'); return v },
+  PluginSettings: async (id) => ({ ...chekiDefaults, ...(pluginSettings[id] || {}) }),
+  SavePluginSettings: async (id, st) => { pluginSettings[id] = st },
+  OpenPluginsDir: async () => {},
+  ChoosePluginsDir: async () => pluginsView(),
+  InstallPlugin: async (path) => { const file = path.split('/').pop(); if (!demoPlugins.some((p) => p.file === file)) demoPlugins.push({ file, id: file.replace(/\.sinaps$/, ''), name: file.replace(/\.sinaps$/, ''), version: '0.1', description: '', icon: 'puzzle', requires: [], fields: [], enabled: false, base: 'error', error: 'Эта версия CRM не умеет запускать этот плагин' }); const v = pluginsView(); emit('plugins:changed', v); return v },
+  RevealPlugin: async () => {},
+  MarkReceipt: async (r) => {
+    await wait(200)
+    const m = (messages[r.chatId] || []).find((x) => x.msgId === r.msgId); const c = find(r.chatId)
+    const paidAt = r.date ? Math.floor(new Date(r.date + 'T12:00:00').getTime() / 1000) : m.date
+    const rec = { id: r.chatId * 1000 + r.msgId, chatId: r.chatId, msgId: r.msgId, chatTitle: c.title, channel: c.channel, fileName: m.fileName || 'Фото', amount: r.amount, currency: '₽', status: r.status || 'paid', what: r.what || '', paidAt, createdAt: now }
+    receipts = receipts.filter((x) => !(x.chatId === r.chatId && x.msgId === r.msgId)); receipts.push(rec)
+    c.amount = receipts.filter((x) => x.chatId === r.chatId && x.status === 'paid').reduce((a, x) => a + x.amount, 0)
+    if (rec.status === 'paid') c.stage = 'deal'
+    emit('receipts:changed', r.chatId); emit('chats:changed'); return rec
+  },
+  UnmarkReceipt: async (chatId, msgId) => { receipts = receipts.filter((x) => !(x.chatId === chatId && x.msgId === msgId)); emit('receipts:changed', chatId); emit('chats:changed') },
+  Receipts: async ({ chatId, period }) => demoReport(chatId, period),
+  ChekiSummary: async () => ({ count: receipts.length, sumYear: receipts.filter((r) => r.status === 'paid').reduce((a, r) => a + r.amount, 0), clients: new Set(receipts.map((r) => r.chatId)).size, year: new Date().getFullYear(), currency: '₽' }),
+  ExportReceipts: async () => { await wait(400); return { path: '/home/timur/sinaps-cheki.xlsx', count: receipts.length } },
+  RemoveMessage: async (chatId, msgId) => {
+    messages[chatId] = messages[chatId].filter((m) => m.msgId !== msgId)
+    emit('message:deleted', { chatId, removed: [msgId], marked: [] }); emit('chats:changed')
+  },
   WaStatus: async () => waStatus,
   WaConnect: async () => {
     setWa({ state: 'connecting' }); await wait(600)
@@ -136,7 +217,7 @@ export const mock = {
       .sort((a, b) => b.lastAt - a.lastAt)
       .map((c) => ({ ...c }))
   },
-  GetChat: async (id) => ({ chat: { ...find(id) }, messages: [...(messages[id] || [])], events: [...(events[id] || []), { kind: 'import', text: 'Импорт из Telegram', at: find(id).createdAt }] }),
+  GetChat: async (id) => ({ chat: { ...find(id) }, messages: [...(messages[id] || [])], events: [...(events[id] || []), { kind: 'import', text: 'Импорт из Telegram', at: find(id).createdAt }], receipts: pluginsView().items.some((p) => p.id === 'cheki' && p.status === 'on') ? receipts.filter((r) => r.chatId === id).sort((a, b) => b.paidAt - a.paidAt) : null }),
   UpdateChat: async (id, p) => {
     const c = find(id)
     if (p.stage && p.stage !== c.stage) (events[id] ||= []).unshift({ kind: 'stage', text: 'Этап изменён', at: Math.floor(Date.now() / 1000) })

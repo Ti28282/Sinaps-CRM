@@ -1146,21 +1146,24 @@ func (c *Client) DeleteMessage(ctx context.Context, chat store.Chat, msgID int64
 	if err != nil {
 		return errors.New("сообщение не найдено")
 	}
-	if !m.Out {
-		return errors.New("удалять можно только свои сообщения — переписка клиента сохраняется")
-	}
 	switch chat.Kind {
 	case "channel":
 		_, err = api.ChannelsDeleteMessages(ctx, &tg.ChannelsDeleteMessagesRequest{
 			Channel: &tg.InputChannel{ChannelID: chat.PeerID, AccessHash: chat.AccessHash}, ID: []int{int(msgID)},
 		})
 	default:
+		// в личке Revoke удаляет у обоих — и своё сообщение, и сообщение клиента
 		_, err = api.MessagesDeleteMessages(ctx, &tg.MessagesDeleteMessagesRequest{Revoke: true, ID: []int{int(msgID)}})
 	}
-	if err != nil && !tgerr.Is(err, "MESSAGE_DELETE_FORBIDDEN") {
-		return humanErr(err)
+	if err != nil {
+		if !tgerr.Is(err, "MESSAGE_DELETE_FORBIDDEN") {
+			return humanErr(err)
+		}
+		if !m.Out {
+			return errors.New("Telegram не разрешил удалить сообщение клиента: в группах чужие сообщения удаляет только админ. Можно убрать его только из CRM")
+		}
 	}
-	if err := c.st.DeleteOwnMessage(ctx, chat.ID, msgID); err != nil {
+	if err := c.st.HideMessage(ctx, chat.ID, msgID); err != nil {
 		return err
 	}
 	c.emit("message:deleted", store.DeleteResult{ChatID: chat.ID, Removed: []int64{msgID}, Marked: []int64{}})

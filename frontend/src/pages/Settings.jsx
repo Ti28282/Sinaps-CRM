@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { api, applyTheme, errText } from '../api.js'
+import { api, on, applyTheme, errText, money } from '../api.js'
 import { Icon } from '../components/ui.jsx'
 
 const TABS = [
@@ -9,7 +9,7 @@ const TABS = [
   { id: 'plugins', label: 'Плагины' },
 ]
 
-export default function Settings({ settings, reloadSettings, toast }) {
+export default function Settings({ settings, reloadSettings, toast, plugins, setPlugins, openPage }) {
   const [tab, setTab] = useState('appearance')
   return (
     <div className="page">
@@ -30,7 +30,7 @@ export default function Settings({ settings, reloadSettings, toast }) {
         {tab === 'appearance' && <Appearance toast={toast} />}
         {tab === 'sync' && <Sync settings={settings} reloadSettings={reloadSettings} toast={toast} />}
         {tab === 'data' && <DataIO toast={toast} />}
-        {tab === 'plugins' && <Plugins toast={toast} />}
+        {tab === 'plugins' && <Plugins plugins={plugins} setPlugins={setPlugins} toast={toast} openPage={openPage} />}
       </div>
     </div>
   )
@@ -133,50 +133,197 @@ function Sync({ settings, reloadSettings, toast }) {
   )
 }
 
-function Plugins({ toast }) {
-  const [list, setList] = useState(null)
-  useEffect(() => { api.plugins().then(setList).catch((e) => toast(errText(e), 'err')) }, []) // eslint-disable-line react-hooks/exhaustive-deps
+const STATUS = {
+  on: { label: 'Подключён', cls: 'st-on' },
+  off: { label: 'Выключен', cls: 'st-off' },
+  wait: { label: 'Ждёт', cls: 'st-wait' },
+  error: { label: 'Ошибка', cls: 'st-err' },
+  invalid: { label: 'Не плагин', cls: 'st-none' },
+}
+
+function Plugins({ plugins, setPlugins, toast, openPage }) {
+  const [panel, setPanel] = useState(null) // id плагина с открытыми настройками
+  const [busy, setBusy] = useState('')
+
+  async function run(kind, fn) {
+    setBusy(kind)
+    try { const v = await fn(); if (v) setPlugins(v); return v } catch (e) { toast(errText(e), 'err') } finally { setBusy('') }
+  }
+  const refresh = () => run('scan', () => api.plugins())
+
+  useEffect(() => { refresh() }, []) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // архив .sinaps, брошенный в окно, — копируем в папку плагинов
+  useEffect(() => on('files:dropped', async (paths) => {
+    const list = (paths || []).filter((p) => /\.sinaps$/i.test(p))
+    if (!list.length) return toast('Плагин — это архив с расширением .sinaps', 'err')
+    for (const p of list) {
+      const v = await run('install', () => api.installPlugin(p))
+      if (v) toast(`Плагин «${p.split(/[\\/]/).pop()}» добавлен в папку — включите его в списке`)
+    }
+  }), []) // eslint-disable-line react-hooks/exhaustive-deps
 
   async function toggle(p) {
+    const v = await run('toggle', () => api.setPluginEnabled(p.id, !p.enabled))
+    if (v && !p.enabled) {
+      const now = v.items.find((x) => x.id === p.id)
+      if (now?.status === 'on') toast(`«${p.name}» подключён`)
+    }
+    if (p.enabled && panel === p.id) setPanel(null)
+  }
+
+  if (!plugins) return <section className="panel"><p className="hint">Загрузка…</p></section>
+  const open = plugins.items.find((p) => p.id && p.id === panel && p.status === 'on')
+
+  return (
+    <>
+      <section className="panel plug-folder" aria-label="Папка плагинов">
+        <div className="plug-folder-ico"><Icon name="folder" size={22} /></div>
+        <div style={{ flex: '1 1 260px', minWidth: 0 }}>
+          <div className="hint" style={{ fontSize: 12 }}>Папка плагинов</div>
+          <div className="mono" style={{ fontSize: 14, fontWeight: 500, marginTop: 3, overflowWrap: 'anywhere' }}>{plugins.dir}</div>
+          <div className="hint" style={{ fontSize: 12, marginTop: 4 }}>Найдено: {plugins.found}</div>
+        </div>
+        <div className="row" style={{ gap: 8 }}>
+          <button type="button" className="btn btn-sm btn-inv" onClick={() => api.openPluginsDir().catch((e) => toast(errText(e), 'err'))}>Открыть папку</button>
+          <button type="button" className="btn btn-sm" onClick={refresh} disabled={!!busy}><Icon name="refresh" size={15} /> {busy === 'scan' ? 'Проверяем…' : 'Обновить'}</button>
+          <button type="button" className="btn btn-sm btn-quiet" onClick={() => run('dir', () => api.choosePluginsDir())} disabled={!!busy}>Сменить папку…</button>
+        </div>
+      </section>
+
+      <div className="plug-list">
+        {plugins.items.length === 0 && (
+          <div className="plugins-empty">
+            <div className="plugins-empty-ico"><Icon name="puzzle" size={26} /></div>
+            <div>
+              <div style={{ fontWeight: 600, fontSize: 15 }}>В папке нет плагинов</div>
+              <p className="hint" style={{ marginTop: 6, maxWidth: 520 }}>
+                Плагин — это архив <span className="mono">.sinaps</span>. Положите его в папку плагинов или перетащите сюда, затем включите. Остальные файлы в папке не показываются.
+              </p>
+            </div>
+          </div>
+        )}
+        {plugins.items.map((p) => <PluginRow key={p.file} p={p} busy={!!busy} toggle={() => toggle(p)} openSettings={() => setPanel(p.id)} reveal={() => api.revealPlugin(p.file)} />)}
+        <div className="plug-drop" style={{ '--wails-drop-target': 'drop' }}>
+          {busy === 'install' ? 'Копируем…' : <>Перетащите архив <span className="mono">.sinaps</span> сюда — он скопируется в папку и появится выключенным</>}
+        </div>
+      </div>
+
+      {open && <PluginPanel p={open} toast={toast} close={() => setPanel(null)} openPage={openPage} />}
+    </>
+  )
+}
+
+function PluginRow({ p, busy, toggle, openSettings, reveal }) {
+  const st = STATUS[p.status] || STATUS.invalid
+  const bad = p.status === 'error' || p.status === 'invalid'
+  const icon = bad ? (p.status === 'error' ? 'warn' : 'box') : (p.icon === 'receipt' || p.icon === 'spark' ? p.icon : 'puzzle')
+  const detail = p.error || p.description
+  return (
+    <div className={'plug-row ' + st.cls}>
+      <div className={'plug-ico' + (p.status === 'on' ? ' on' : '')}><Icon name={icon} size={22} /></div>
+      <div style={{ minWidth: 0, flex: '1 1 220px' }}>
+        <div className="row" style={{ gap: 8 }}>
+          <span className="plug-name">{p.name || p.file.replace(/\.sinaps$/i, '')}</span>
+          {p.version && <span className="mono hint" style={{ fontSize: 12 }}>v{p.version}</span>}
+          <span className={'plug-chip ' + st.cls}><i aria-hidden="true" />{p.status === 'wait' ? `Ждёт «${(p.requiresNames || []).join('», «')}»` : st.label}</span>
+        </div>
+        <div className="mono plug-file">{p.file}</div>
+        {detail && <div className="plug-detail">{detail}</div>}
+      </div>
+      <div className="row" style={{ marginLeft: 'auto', gap: 10 }}>
+        {p.status === 'on' && p.fields?.length > 0 && (
+          <button type="button" className="btn btn-sm" onClick={openSettings} aria-label={`Настройки плагина ${p.name}`}><Icon name="settings" size={16} /> Настройки</button>
+        )}
+        {bad ? (
+          <button type="button" className="btn btn-sm btn-quiet" onClick={reveal}>Показать в папке</button>
+        ) : (
+          <button type="button" role="switch" aria-checked={p.enabled} aria-label={`Включить плагин ${p.name}`} className="switch" disabled={busy} onClick={toggle}><span /></button>
+        )}
+      </div>
+    </div>
+  )
+}
+
+function PluginPanel({ p, toast, close, openPage }) {
+  const [vals, setVals] = useState(null)
+  const [sum, setSum] = useState(null)
+  const isCheki = p.id === 'cheki'
+
+  useEffect(() => {
+    api.pluginSettings(p.id).then(setVals).catch((e) => toast(errText(e), 'err'))
+    if (isCheki) api.chekiSummary().then(setSum).catch(() => {})
+    const onKey = (e) => e.key === 'Escape' && close()
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [p.id]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  async function set(k, v) {
+    const next = { ...vals, [k]: v }
+    setVals(next)
+    try { await api.savePluginSettings(p.id, next) } catch (e) { toast(errText(e), 'err') }
+  }
+
+  async function exportXlsx() {
     try {
-      await api.setPluginEnabled(p.id, !p.enabled)
-      setList((l) => l.map((x) => (x.id === p.id ? { ...x, enabled: !x.enabled } : x)))
+      const r = await api.exportReceipts(0, 'all')
+      if (r.path) toast(`Сохранено чеков: ${r.count} → ${r.path.split(/[\\/]/).pop()}`)
     } catch (e) { toast(errText(e), 'err') }
   }
 
-  if (!list) return <section className="panel"><p className="hint">Загрузка…</p></section>
-
   return (
-    <section className="panel">
-      <h2>Плагины</h2>
-      {list.length === 0 ? (
-        <div className="plugins-empty">
-          <div className="plugins-empty-ico"><Icon name="puzzle" size={26} /></div>
-          <div>
-            <div style={{ fontWeight: 600, fontSize: 15 }}>Плагинов пока нет</div>
-            <p className="hint" style={{ marginTop: 6, maxWidth: 520 }}>
-              Здесь будут расширения: WhatsApp, ИИ-черновики ответов, экспорт в таблицы. Каждый можно будет включить и настроить отдельно.
-            </p>
+    <div className="drawer-back" onMouseDown={(e) => e.target === e.currentTarget && close()}>
+      <aside className="drawer" role="dialog" aria-modal="true" aria-labelledby="plug-title">
+        <div className="row" style={{ gap: 14, flexWrap: 'nowrap' }}>
+          <div className="plug-ico on" style={{ width: 48, height: 48 }}><Icon name={p.icon === 'receipt' ? 'receipt' : 'puzzle'} size={22} /></div>
+          <div style={{ minWidth: 0 }}>
+            <h2 id="plug-title" style={{ margin: 0, fontSize: 19 }}>{p.name} <span className="mono hint" style={{ fontSize: 12 }}>v{p.version}</span></h2>
+            <div className="mono plug-file">{p.file}</div>
           </div>
+          <button type="button" className="icon-btn" style={{ marginLeft: 'auto', width: 38, height: 38 }} aria-label="Закрыть" onClick={close}><Icon name="close" /></button>
         </div>
-      ) : (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-          {list.map((p) => (
-            <div key={p.id} className="account">
-              <Icon name="puzzle" />
-              <div style={{ minWidth: 0 }}>
-                <div style={{ fontWeight: 600 }}>{p.name} <span className="hint mono" style={{ fontSize: 12 }}>v{p.version}</span></div>
-                <div className="hint" style={{ fontSize: 13 }}>{p.description}</div>
-              </div>
-              <label className="check" style={{ marginLeft: 'auto' }}>
-                <input type="checkbox" checked={p.enabled} onChange={() => toggle(p)} />
-                <span className="sr">Включить {p.name}</span>
+        {p.description && <p className="hint" style={{ marginTop: -6 }}>{p.description}</p>}
+
+        {isCheki && sum && (
+          <div className="stats" style={{ gap: 10 }}>
+            <div className="stat mini"><div className="stat-label">Чеков отмечено</div><div className="stat-value">{sum.count}</div></div>
+            <div className="stat mini"><div className="stat-label">Сумма за {sum.year}</div><div className="stat-value accent">{money(sum.sumYear, sum.currency)}</div></div>
+            <div className="stat mini"><div className="stat-label">Клиентов с чеками</div><div className="stat-value">{sum.clients}</div></div>
+          </div>
+        )}
+
+        {vals && (
+          <div className="kv plug-form">
+            {p.fields.map((f) => (
+              <label key={f.key}>
+                <span>{f.label}</span>
+                {f.type === 'bool' ? (
+                  <input type="checkbox" className="cb" checked={!!vals[f.key]} onChange={(e) => set(f.key, e.target.checked)} />
+                ) : f.type === 'select' ? (
+                  <select className="input input-sm" value={vals[f.key] ?? ''} onChange={(e) => set(f.key, e.target.value)}>
+                    {f.options.map((o) => <option key={o} value={o}>{o}</option>)}
+                  </select>
+                ) : (
+                  <input className="input input-sm" type={f.type === 'number' ? 'number' : 'text'} defaultValue={vals[f.key] ?? ''}
+                    onBlur={(e) => set(f.key, f.type === 'number' ? Number(e.target.value) : e.target.value)} />
+                )}
               </label>
-            </div>
-          ))}
-        </div>
-      )}
-    </section>
+            ))}
+          </div>
+        )}
+
+        {isCheki && (
+          <div className="row">
+            <button type="button" className="btn btn-primary" onClick={() => { close(); openPage('cheki') }}>Открыть «Чеки» <Icon name="arrow" size={16} /></button>
+            <button type="button" className="btn" onClick={exportXlsx}>Экспорт чеков в Excel</button>
+          </div>
+        )}
+        <p className="hint">
+          {isCheki ? 'Плагин работает только внутри CRM: ничего не отправляет клиентам и не меняет переписку в мессенджерах. ' : ''}
+          Поля этого окна описаны в settings.json внутри архива.
+        </p>
+      </aside>
+    </div>
   )
 }
 

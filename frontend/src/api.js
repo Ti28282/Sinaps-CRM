@@ -23,9 +23,21 @@ export const api = {
   saveSettings: (p) => call('SaveSettings', p),
   config: () => call('GetConfig'),
   setTheme: (t) => call('SetTheme', t),
-  plugins: () => call('ListPlugins'),
+  plugins: () => call('Plugins'),
   setPluginEnabled: (id, on) => call('SetPluginEnabled', id, on),
+  pluginSettings: (id) => call('PluginSettings', id),
   savePluginSettings: (id, settings) => call('SavePluginSettings', id, settings),
+  openPluginsDir: () => call('OpenPluginsDir'),
+  choosePluginsDir: () => call('ChoosePluginsDir'),
+  installPlugin: (path) => call('InstallPlugin', path),
+  revealPlugin: (file) => call('RevealPlugin', file),
+
+  // плагин «Чеки»
+  markReceipt: (req) => call('MarkReceipt', req),
+  unmarkReceipt: (chatId, msgId) => call('UnmarkReceipt', chatId, msgId),
+  receipts: (chatId = 0, period = 'year') => call('Receipts', { chatId, period }),
+  chekiSummary: () => call('ChekiSummary'),
+  exportReceipts: (chatId = 0, period = 'year') => call('ExportReceipts', { chatId, period }),
   exportData: (format) => call('ExportData', format),
   pickImportFile: () => call('PickImportFile'),
   previewImport: (path) => call('PreviewImport', path),
@@ -62,6 +74,7 @@ export const api = {
   deleteChat: (id) => call('DeleteChat', id),
   send: (id, text) => call('SendMessage', id, text),
   deleteMessage: (chatId, msgId) => call('DeleteMessage', chatId, msgId),
+  removeMessage: (chatId, msgId, mode) => call('RemoveMessage', chatId, msgId, mode),
   pickFile: () => call('PickFile'),
   fileInfo: (path) => call('FileInfo', path),
   sendFile: (chatId, path, caption, asPhoto) => call('SendFile', chatId, path, caption, asPhoto),
@@ -84,7 +97,7 @@ export const STAGES = [
 
 export const errText = (e) => (typeof e === 'string' ? e : e?.message || String(e))
 
-export const money = (n) => (n || 0).toLocaleString('ru-RU') + ' ₽'
+export const money = (n, cur = '₽') => (n || 0).toLocaleString('ru-RU') + ' ' + cur
 
 export function when(unix) {
   if (!unix) return ''
@@ -119,3 +132,19 @@ export function initials(title = '') {
 export function applyTheme(theme) {
   document.documentElement.dataset.theme = theme === 'light' ? 'light' : 'dark'
 }
+
+// плагин включён и работает
+export const pluginOn = (plugins, id) => !!plugins?.items?.some((p) => p.id === id && p.status === 'on')
+
+// «Что можно отметить как чек» из настроек плагина
+export function canBeReceipt(kinds, m) {
+  if (m.mediaKind !== 'file' && m.mediaKind !== 'photo') return false
+  const name = (m.fileName || '').toLowerCase()
+  const pdf = m.mediaKind === 'file' && name.endsWith('.pdf')
+  const img = m.mediaKind === 'photo' || (m.mediaKind === 'file' && /\.(jpe?g|png|webp|heic|gif|bmp)$/.test(name))
+  if (kinds === 'Только PDF') return pdf
+  if (kinds === 'Любой файл') return true
+  return pdf || img
+}
+
+export const currencySymbol = (label = '') => (label.includes('сом') ? 'сом' : label.includes('₸') ? '₸' : label.includes('$') ? '$' : '₽')

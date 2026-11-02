@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { api, on, isDemo, errText } from './api.js'
+import { api, on, isDemo, errText, pluginOn } from './api.js'
 import { Icon, MailIcon, TgIcon, WaIcon } from './components/ui.jsx'
 import Pipeline from './pages/Pipeline.jsx'
 import Chats from './pages/Chats.jsx'
 import Broadcast from './pages/Broadcast.jsx'
 import Connect from './pages/Connect.jsx'
 import Settings from './pages/Settings.jsx'
+import Receipts from './pages/Receipts.jsx'
 
 const NAV = [
   { id: 'pipeline', label: 'Воронка', icon: 'board' },
@@ -15,6 +16,11 @@ const NAV = [
   { id: 'settings', label: 'Настройки', icon: 'settings' },
 ]
 
+// страницы плагинов: пункт меню появляется, только когда плагин включён и работает
+const PLUGIN_NAV = [
+  { id: 'cheki', plugin: 'cheki', label: 'Чеки', icon: 'receipt' },
+]
+
 export default function App() {
   const [page, setPage] = useState('pipeline')
   const [openChat, setOpenChat] = useState(null)
@@ -22,6 +28,7 @@ export default function App() {
   const [tg, setTg] = useState({ state: 'no_keys' })
   const [wa, setWa] = useState({ state: 'off' })
   const [settings, setSettings] = useState(null)
+  const [plugins, setPlugins] = useState(null)
   const [toasts, setToasts] = useState([])
   const tid = useRef(0)
 
@@ -47,7 +54,9 @@ export default function App() {
     reloadSettings()
     api.tgStatus().then(setTg)
     api.waStatus().then(setWa)
+    api.plugins().then(setPlugins).catch(() => {})
     const offs = [
+      on('plugins:changed', setPlugins),
       on('tg:status', setTg),
       on('wa:status', setWa),
       on('chats:changed', reload),
@@ -62,6 +71,12 @@ export default function App() {
   useEffect(() => {
     if (settings && !settings.tgFolderId && chats.length === 0) setPage('connect')
   }, [settings]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  const pluginNav = PLUGIN_NAV.filter((n) => pluginOn(plugins, n.plugin))
+  // плагин выключили, пока была открыта его страница
+  useEffect(() => {
+    if (plugins && PLUGIN_NAV.some((n) => n.id === page) && !pluginNav.some((n) => n.id === page)) setPage('settings')
+  }, [plugins]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const unread = chats.filter((c) => c.unread).length
   const tgCount = chats.filter((c) => c.channel === 'tg').length
@@ -81,6 +96,13 @@ export default function App() {
               <Icon name={n.icon} />
               {n.label}
               {n.id === 'chats' && unread > 0 && <span className="count">{unread}</span>}
+            </button>
+          ))}
+          {pluginNav.length > 0 && <div className="nav-group">Плагины</div>}
+          {pluginNav.map((n) => (
+            <button key={n.id} type="button" aria-current={page === n.id ? 'page' : undefined} onClick={() => go(n.id)}>
+              <Icon name={n.icon} />
+              {n.label}
             </button>
           ))}
         </nav>
@@ -122,9 +144,10 @@ export default function App() {
 
       <main className="main">
         {page === 'pipeline' && <Pipeline chats={chats} tg={tg} toast={toast} openChat={(id) => go('chats', id)} />}
-        {page === 'chats' && <Chats chats={chats} openId={openChat} setOpenId={setOpenChat} toast={toast} tg={tg} wa={wa} />}
+        {page === 'chats' && <Chats chats={chats} openId={openChat} setOpenId={setOpenChat} toast={toast} tg={tg} wa={wa} plugins={plugins} />}
         {page === 'broadcast' && <Broadcast chats={chats} settings={settings} reloadSettings={reloadSettings} tg={tg} toast={toast} />}
-        {page === 'settings' && <Settings settings={settings} reloadSettings={reloadSettings} toast={toast} />}
+        {page === 'settings' && <Settings settings={settings} reloadSettings={reloadSettings} toast={toast} plugins={plugins} setPlugins={setPlugins} openPage={go} />}
+        {page === 'cheki' && pluginOn(plugins, 'cheki') && <Receipts toast={toast} openChat={(id) => go('chats', id)} />}
         {page === 'connect' && <Connect tg={tg} wa={wa} settings={settings} reloadSettings={reloadSettings} toast={toast} done={() => go('pipeline')} />}
       </main>
 

@@ -480,3 +480,44 @@ func PreviewSQLite(path string) (Preview, error) {
 	}
 	return Preview{Kind: "sqlite", File: filepath.Base(path), Chats: c, Messages: m, Problems: []string{}, Sample: [][]string{}}, nil
 }
+
+// ---------- плагин «Чеки» ----------
+
+// ExportReceiptsXLSX — лист «Чеки»: дата, клиент, за что, файл, статус, сумма.
+func ExportReceiptsXLSX(rows []store.Receipt, path string) error {
+	f := excelize.NewFile()
+	defer f.Close()
+	const sh = "Чеки"
+	if err := f.SetSheetName("Sheet1", sh); err != nil {
+		return err
+	}
+	sw, err := f.NewStreamWriter(sh)
+	if err != nil {
+		return err
+	}
+	bold, _ := f.NewStyle(&excelize.Style{Font: &excelize.Font{Bold: true}})
+	_ = sw.SetColWidth(1, 1, 12)
+	_ = sw.SetColWidth(2, 2, 30)
+	_ = sw.SetColWidth(4, 5, 32)
+	if err := sw.SetRow("A1", cells([]string{"Дата", "Клиент", "Канал", "За что", "Файл", "Статус", "Сумма", "Валюта"}, bold)); err != nil {
+		return err
+	}
+	for i, r := range rows {
+		cell, _ := excelize.CoordinatesToCellName(1, i+2)
+		if err := sw.SetRow(cell, []any{
+			time.Unix(r.PaidAt, 0).Format("02.01.2006"), r.ChatTitle, channelTitle(r.Channel), r.What, r.FileName,
+			store.ReceiptStatusName(r.Status), r.Amount, r.Currency,
+		}); err != nil {
+			return err
+		}
+	}
+	if err := sw.Flush(); err != nil {
+		return err
+	}
+	_ = f.SetPanes(sh, &excelize.Panes{Freeze: true, YSplit: 1, TopLeftCell: "A2", ActivePane: "bottomLeft"})
+	tmp := strings.TrimSuffix(path, filepath.Ext(path)) + ".tmp.xlsx"
+	if err := f.SaveAs(tmp); err != nil {
+		return err
+	}
+	return os.Rename(tmp, path)
+}

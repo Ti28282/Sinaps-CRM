@@ -1,8 +1,8 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
-import { api, on, STAGES, errText, when, clock, dayLabel } from '../api.js'
+import { api, on, STAGES, errText, when, clock, dayLabel, pluginOn, canBeReceipt, money } from '../api.js'
 import { Avatar, ChannelChip, Icon } from '../components/ui.jsx'
 
-export default function Chats({ chats, openId, setOpenId, toast, tg, wa }) {
+export default function Chats({ chats, openId, setOpenId, toast, tg, wa, plugins }) {
   const [q, setQ] = useState('')
   const list = useMemo(() => {
     const s = q.trim().toLowerCase()
@@ -40,14 +40,14 @@ export default function Chats({ chats, openId, setOpenId, toast, tg, wa }) {
           {list.length === 0 && <div style={{ padding: 20, color: 'var(--faint)', fontSize: 13 }}>Ничего не найдено</div>}
         </div>
       </aside>
-      {openId ? <Thread key={openId} id={openId} toast={toast} tg={tg} wa={wa} onDeleted={() => setOpenId(null)} /> : (
+      {openId ? <Thread key={openId} id={openId} toast={toast} tg={tg} wa={wa} cheki={pluginOn(plugins, 'cheki')} onDeleted={() => setOpenId(null)} /> : (
         <div className="empty"><div><Icon name="chat" size={36} /><h3>Нет диалогов</h3><p>Подключите Telegram и выберите папку с клиентами.</p></div></div>
       )}
     </div>
   )
 }
 
-function Thread({ id, toast, tg, wa, onDeleted }) {
+function Thread({ id, toast, tg, wa, cheki, onDeleted }) {
   const [view, setView] = useState(null)
   const [text, setText] = useState('')
   const [sending, setSending] = useState(false)
@@ -56,6 +56,9 @@ function Thread({ id, toast, tg, wa, onDeleted }) {
   const [noCompress, setNoCompress] = useState(false)
   const [upload, setUpload] = useState(null) // { done, total }
   const [dragOver, setDragOver] = useState(false)
+  const [kinds, setKinds] = useState('PDF и фото') // настройка плагина «Чеки»
+  const [receiptFor, setReceiptFor] = useState(null) // сообщение, которое отмечаем как чек
+  const [deleteFor, setDeleteFor] = useState(null) // сообщение, которое удаляем
   const body = useRef(null)
 
   const load = () => api.chat(id).then(setView).catch((e) => toast(errText(e), 'err'))
@@ -81,8 +84,16 @@ function Thread({ id, toast, tg, wa, onDeleted }) {
     const off2 = on('chats:changed', () => api.chat(id).then((v) => setView((cur) => (cur ? { ...cur, chat: v.chat, events: v.events } : v))).catch(() => {}))
     const off4 = on('files:dropped', (paths) => { setDragOver(false); pickPath(paths[0], paths.length) })
     const off5 = on('upload:progress', (p) => p.chatId === id && setUpload({ done: p.done, total: p.total }))
-    return () => { off1 && off1(); off2 && off2(); off3 && off3(); off4 && off4(); off5 && off5() }
+    const off6 = on('receipts:changed', (chatId) => chatId === id && api.chat(id).then((v) => setView((cur) => (cur ? { ...cur, chat: v.chat, events: v.events, receipts: v.receipts } : v))).catch(() => {}))
+    const off7 = on('plugin:settings', (p) => p?.id === 'cheki' && p.settings?.kinds && setKinds(p.settings.kinds))
+    return () => { [off1, off2, off3, off4, off5, off6, off7].forEach((f) => f && f()) }
   }, [id]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // плагин «Чеки» включили/выключили — подтягиваем отметки и настройку
+  useEffect(() => {
+    api.chat(id).then((v) => setView((cur) => (cur ? { ...cur, receipts: v.receipts } : v))).catch(() => {})
+    if (cheki) api.pluginSettings('cheki').then((st) => st?.kinds && setKinds(st.kinds)).catch(() => {})
+  }, [cheki, id])
 
   useEffect(() => {
     if (body.current) body.current.scrollTop = body.current.scrollHeight
@@ -92,6 +103,8 @@ function Thread({ id, toast, tg, wa, onDeleted }) {
   const c = view.chat
   const net = c.channel === 'wa' ? { name: 'WhatsApp', ready: wa?.state === 'ready' } : { name: 'Telegram', ready: tg.state === 'ready' }
   const canSend = c.channel !== 'manual' && net.ready // лиды из файла — без мессенджера
+  const receipts = cheki && view.receipts ? view.receipts : null
+  const receiptOf = new Map((receipts || []).map((r) => [r.msgId, r]))
 
   async function pickPath(path, count = 1) {
     if (!path) return
@@ -126,10 +139,6 @@ function Thread({ id, toast, tg, wa, onDeleted }) {
     try { await api.updateChat(id, p) } catch (e) { toast(errText(e), 'err') }
   }
 
-  async function removeMsg(m) {
-    if (!window.confirm('Удалить сообщение у вас и у клиента в Telegram?')) return
-    try { await api.deleteMessage(id, m.msgId) } catch (e) { toast(errText(e), 'err') }
-  }
 
   async function remove() {
     if (!window.confirm(`Убрать «${c.title}» из CRM? В Telegram ничего не изменится, при синхронизации чат не вернётся (вернуть можно в «Подключениях»).`)) return
@@ -165,24 +174,37 @@ function Thread({ id, toast, tg, wa, onDeleted }) {
             return (
               <Fragment key={m.msgId}>
                 {showDay && <div className="day">{d}</div>}
-                <div className={'bubble' + (m.out ? ' out' : '') + (m.deleted ? ' deleted' : '') + (m.mediaKind === 'photo' ? ' has-photo' : '')}>
+                <div className={'bubble' + (m.out ? ' out' : '') + (m.deleted ? ' deleted' : '') + (m.mediaKind === 'photo' ? ' has-photo' : '') + (receiptOf.has(m.msgId) ? ' is-receipt' : '')}>
                   {m.mediaKind === 'photo' && <Photo m={m} open={setPhoto} />}
                   {m.mediaKind === 'file' && <FileCard m={m} toast={toast} />}
                   {m.text && <div className="bubble-text">{m.text}</div>}
+                  {receiptOf.has(m.msgId) && <ReceiptTag r={receiptOf.get(m.msgId)} onClick={() => setReceiptFor(m)} />}
                   <div className="time">
                     {m.deleted && <span className="deleted-tag">удалено клиентом · </span>}
                     {clock(m.date)}
                   </div>
-                  {m.out && canSend && (
-                    <button type="button" className="msg-del" aria-label="Удалить сообщение у всех" onClick={() => removeMsg(m)}>
-                      <Icon name="trash" size={14} />
+                  <div className="msg-actions">
+                    {receipts && !m.out && !receiptOf.has(m.msgId) && canBeReceipt(kinds, m) && (
+                      <button type="button" className="msg-act receipt" aria-label="Отметить как чек" title="Отметить как чек" onClick={() => setReceiptFor(m)}>
+                        <Icon name="receipt" size={15} />
+                      </button>
+                    )}
+                    <button type="button" className="msg-act" aria-label="Удалить сообщение" title="Удалить сообщение" onClick={() => setDeleteFor(m)}>
+                      <Icon name="trash" size={15} />
                     </button>
-                  )}
+                  </div>
                 </div>
               </Fragment>
             )
           })}
         </div>
+
+        {receiptFor && (
+          <ReceiptDialog m={receiptFor} chatId={id} r={receiptOf.get(receiptFor.msgId)} toast={toast} close={() => setReceiptFor(null)} />
+        )}
+        {deleteFor && (
+          <DeleteDialog m={deleteFor} chat={c} net={net} canSend={canSend} toast={toast} close={() => setDeleteFor(null)} />
+        )}
 
         {photo && (
           <button type="button" className="lightbox" aria-label="Закрыть фото" onClick={() => setPhoto(null)}>
@@ -232,7 +254,7 @@ function Thread({ id, toast, tg, wa, onDeleted }) {
         </div>
       </section>
 
-      <ClientCard key={c.id + ':' + c.stage} chat={c} events={view.events} patch={patch} />
+      <ClientCard key={c.id + ':' + c.stage + ':' + c.amount} chat={c} events={view.events} patch={patch} receipts={receipts} />
     </>
   )
 }
@@ -272,7 +294,7 @@ function Photo({ m, open }) {
   )
 }
 
-function ClientCard({ chat: c, events, patch }) {
+function ClientCard({ chat: c, events, patch, receipts }) {
   const [amount, setAmount] = useState(c.amount ? String(c.amount) : '')
   const [nextStep, setNextStep] = useState(c.nextStep)
   const [tags, setTags] = useState(c.tags)
@@ -324,6 +346,32 @@ function ClientCard({ chat: c, events, patch }) {
           onChange={(e) => setNote(e.target.value)} onBlur={() => note !== c.note && patch({ note })} />
       </label>
 
+      {receipts && (
+        <div className="field">
+          <div className="row" style={{ justifyContent: 'space-between' }}>
+            <span className="eyebrow">Чеки клиента</span>
+            <span className="hint" style={{ fontSize: 12 }}>{receipts.length} шт.</span>
+          </div>
+          {receipts.length === 0 ? (
+            <p className="hint" style={{ fontSize: 13 }}>Наведите на PDF или фото клиента в переписке и нажмите значок чека.</p>
+          ) : (
+            <div className="client-receipts">
+              {receipts.slice(0, 6).map((r) => (
+                <div key={r.id} className="client-receipt">
+                  <span className="mono">{new Date(r.paidAt * 1000).toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit' })}</span>
+                  <span className="cr-what">{r.what || r.fileName}</span>
+                  <span className={'mono cr-sum st-' + r.status}>{money(r.amount, r.currency)}</span>
+                </div>
+              ))}
+              <div className="client-receipt total">
+                <span>Оплачено</span>
+                <span className="mono">{money(receipts.filter((r) => r.status === 'paid').reduce((a, r) => a + r.amount, 0), receipts[0]?.currency)}</span>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
       <div className="field">
         <div className="eyebrow">История</div>
         <div className="history">
@@ -331,5 +379,134 @@ function ClientCard({ chat: c, events, patch }) {
         </div>
       </div>
     </aside>
+  )
+}
+
+const RECEIPT_STATUS = { paid: 'оплачен', wait: 'ожидает', refund: 'возврат' }
+
+function ReceiptTag({ r, onClick }) {
+  return (
+    <button type="button" className={'receipt-tag st-' + r.status} onClick={onClick} title="Изменить чек">
+      <Icon name="receipt" size={14} />
+      Чек · {money(r.amount, r.currency)} · {RECEIPT_STATUS[r.status]}
+      <span className="receipt-date">{new Date(r.paidAt * 1000).toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' })}</span>
+    </button>
+  )
+}
+
+const isoDay = (unix) => {
+  const d = new Date(unix * 1000)
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+}
+
+function ReceiptDialog({ m, chatId, r, toast, close }) {
+  const [amount, setAmount] = useState(r ? String(r.amount) : '')
+  const [date, setDate] = useState(isoDay(r ? r.paidAt : m.date))
+  const [status, setStatus] = useState(r?.status || 'paid')
+  const [what, setWhat] = useState(r?.what || '')
+  const [busy, setBusy] = useState(false)
+
+  async function save() {
+    setBusy(true)
+    try {
+      await api.markReceipt({ chatId, msgId: m.msgId, amount: Number(amount || 0), date, status, what })
+      toast(r ? 'Чек изменён' : 'Чек сохранён')
+      close()
+    } catch (e) { toast(errText(e), 'err') } finally { setBusy(false) }
+  }
+  async function unmark() {
+    setBusy(true)
+    try { await api.unmarkReceipt(chatId, m.msgId); toast('Отметка «чек» снята'); close() } catch (e) { toast(errText(e), 'err') } finally { setBusy(false) }
+  }
+
+  return (
+    <div className="modal-back" onMouseDown={(e) => e.target === e.currentTarget && close()}>
+      <form className="modal modal-sm" role="dialog" aria-modal="true" aria-labelledby="rc-title" onSubmit={(e) => { e.preventDefault(); save() }}>
+        <div className="modal-head">
+          <div>
+            <h2 id="rc-title">{r ? 'Чек от клиента' : 'Отметить как чек'}</h2>
+            <p className="hint" style={{ marginTop: 4 }}>{m.fileName || (m.mediaKind === 'photo' ? 'Фото' : 'Файл')}</p>
+          </div>
+          <button type="button" className="icon-btn" aria-label="Закрыть" onClick={close}><Icon name="close" /></button>
+        </div>
+        <label className="field">
+          <span>Сумма</span>
+          <input className="input mono" style={{ fontSize: 16, fontWeight: 600 }} inputMode="numeric" autoFocus placeholder="25000"
+            value={amount} onChange={(e) => setAmount(e.target.value.replace(/\D/g, ''))} />
+        </label>
+        <div className="row" style={{ flexWrap: 'nowrap' }}>
+          <label className="field" style={{ flex: 1 }}>
+            <span>Дата оплаты</span>
+            <input className="input" type="date" value={date} onChange={(e) => setDate(e.target.value)} />
+          </label>
+          <label className="field" style={{ flex: 1 }}>
+            <span>Статус</span>
+            <select className="input" value={status} onChange={(e) => setStatus(e.target.value)}>
+              <option value="paid">Оплачен</option>
+              <option value="wait">Ожидает</option>
+              <option value="refund">Возврат</option>
+            </select>
+          </label>
+        </div>
+        <label className="field">
+          <span>За что</span>
+          <input className="input" placeholder="Бот записи · этап 2" value={what} onChange={(e) => setWhat(e.target.value)} />
+        </label>
+        <div className="row" style={{ justifyContent: 'flex-end' }}>
+          {r && <button type="button" className="btn btn-danger" style={{ marginRight: 'auto' }} disabled={busy} onClick={unmark}>Снять отметку</button>}
+          <button type="button" className="btn" onClick={close}>Отмена</button>
+          <button type="submit" className="btn btn-primary" disabled={busy || (!amount && status !== 'wait')}>{busy ? 'Сохраняем…' : 'Сохранить чек'}</button>
+        </div>
+      </form>
+    </div>
+  )
+}
+
+function DeleteDialog({ m, chat, net, canSend, toast, close }) {
+  // у обоих: Telegram — и своё, и клиента; WhatsApp — только своё
+  const allOk = canSend && (chat.channel === 'tg' || (chat.channel === 'wa' && m.out))
+  const allWhy = !canSend ? `${net.name} не подключён` : chat.channel === 'wa' && !m.out ? 'В WhatsApp у обоих можно удалить только свои сообщения' : ''
+  const [mode, setMode] = useState('crm')
+  const [busy, setBusy] = useState(false)
+
+  async function run() {
+    setBusy(true)
+    try {
+      await api.removeMessage(chat.id, m.msgId, mode)
+      toast(mode === 'all' ? `Сообщение удалено у обоих в ${net.name}` : `Сообщение убрано из CRM · в ${net.name} осталось`)
+      close()
+    } catch (e) { toast(errText(e), 'err') } finally { setBusy(false) }
+  }
+
+  return (
+    <div className="modal-back" onMouseDown={(e) => e.target === e.currentTarget && close()}>
+      <div className="modal modal-sm" role="dialog" aria-modal="true" aria-labelledby="dm-title">
+        <div className="modal-head">
+          <h2 id="dm-title">Удалить сообщение?</h2>
+          <button type="button" className="icon-btn" aria-label="Закрыть" onClick={close}><Icon name="close" /></button>
+        </div>
+        <p className="hint del-preview">{m.text || m.fileName || (m.mediaKind === 'photo' ? 'Фото' : 'Сообщение')}</p>
+        <label className={'del-opt' + (mode === 'crm' ? ' sel' : '')}>
+          <input type="radio" name="dm" checked={mode === 'crm'} onChange={() => setMode('crm')} />
+          <span>
+            <b>Только в CRM</b>
+            <span className="hint">В {net.name} у {m.out ? 'клиента' : 'вас и клиента'} останется. Синхронизация его не вернёт.</span>
+          </span>
+        </label>
+        <label className={'del-opt danger' + (mode === 'all' ? ' sel' : '') + (allOk ? '' : ' off')}>
+          <input type="radio" name="dm" checked={mode === 'all'} disabled={!allOk} onChange={() => setMode('all')} />
+          <span>
+            <b>У обоих в {net.name}</b>
+            <span className="hint">{allOk ? 'Исчезнет у вас и у клиента. Отменить нельзя.' : allWhy}</span>
+          </span>
+        </label>
+        <div className="row" style={{ justifyContent: 'flex-end' }}>
+          <button type="button" className="btn" onClick={close}>Отмена</button>
+          <button type="button" className={'btn ' + (mode === 'all' ? 'btn-danger-solid' : 'btn-inv')} disabled={busy} onClick={run}>
+            {busy ? 'Удаляем…' : mode === 'all' ? 'Удалить у обоих' : 'Удалить в CRM'}
+          </button>
+        </div>
+      </div>
+    </div>
   )
 }

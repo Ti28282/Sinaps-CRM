@@ -306,9 +306,21 @@ button:disabled { cursor: default; opacity: .5; }
 .photo-missing { padding: 28px 18px; border-radius: 12px; background: rgba(0,0,0,.18); font-size: 13px; opacity: .8; }
 .bubble.deleted { opacity: .6; }
 .deleted-tag { font-style: italic; }
-.msg-del { position: absolute; top: 50%; left: -40px; transform: translateY(-50%); width: 30px; height: 30px; border-radius: 8px; border: 1px solid var(--line-3); background: var(--card); color: var(--muted); display: grid; place-items: center; opacity: 0; transition: opacity .12s; }
-.bubble:hover .msg-del, .msg-del:focus-visible { opacity: 1; }
-.msg-del:hover { color: var(--danger); border-color: var(--danger-line); }
+/* иконки «Отметить как чек» и «Удалить» рядом с сообщением — видны при наведении */
+.msg-actions { position: absolute; top: 50%; transform: translateY(-50%); display: flex; gap: 6px; opacity: 0; transition: opacity .12s; white-space: normal; }
+.bubble:not(.out) .msg-actions { left: calc(100% + 8px); }
+.bubble.out .msg-actions { right: calc(100% + 8px); flex-direction: row-reverse; }
+.bubble:hover .msg-actions, .msg-actions:focus-within { opacity: 1; }
+.msg-act { width: 32px; height: 32px; border-radius: 9px; border: 1px solid var(--line-3); background: var(--card); color: var(--muted); display: grid; place-items: center; padding: 0; }
+.msg-act:hover { color: var(--danger); border-color: var(--danger-line); }
+.msg-act.receipt { color: var(--accent-text); border-color: var(--ok-line); }
+.msg-act.receipt:hover { color: var(--accent-text); border-color: var(--accent-line); background: var(--ok-bg); }
+.bubble.is-receipt { box-shadow: inset 0 0 0 1px var(--ok-line); }
+.receipt-tag { display: flex; align-items: center; gap: 8px; width: 100%; margin-top: 6px; padding: 8px 10px; border-radius: 10px; border: 0; background: var(--ok-bg); color: var(--accent-text); font-size: 13px; font-weight: 600; text-align: left; white-space: nowrap; }
+.receipt-tag.st-wait { background: var(--warn-bg); color: var(--warn-text); }
+.receipt-tag.st-refund { background: var(--raise); color: var(--muted); }
+.receipt-date { margin-left: auto; padding-left: 10px; font-weight: 500; color: var(--muted-2); }
+.bubble.has-photo .receipt-tag { margin: 6px 0 0; }
 .lightbox { position: fixed; inset: 0; z-index: 70; background: rgba(5,6,8,.88); border: 0; display: grid; place-items: center; padding: 40px; cursor: zoom-out; }
 .lightbox img { max-width: 100%; max-height: 100%; border-radius: 12px; }
 
@@ -375,3 +387,119 @@ body.dragging-card, body.dragging-card * { cursor: grabbing !important; user-sel
 
 /* список папок: видно 6, остальные — скроллом (6 × 52px + 5 × 8px) */
 .folder-list { display: flex; flex-direction: column; gap: 8px; max-height: 352px; overflow-y: auto; overscroll-behavior: contain; margin-right: -6px; padding-right: 6px; }
+
+/* ---------- меню: раздел плагинов ---------- */
+.nav-group { margin: 12px 12px 2px; padding-top: 12px; border-top: 1px solid var(--line); font-size: 11px; letter-spacing: .12em; text-transform: uppercase; color: var(--faint); }
+
+/* ---------- кнопки и переключатель ---------- */
+.btn-inv { background: var(--inv-bg); color: var(--inv-fg); border-color: var(--inv-bg); font-weight: 600; }
+.btn-quiet { color: var(--muted); }
+.btn-danger-solid { background: var(--danger); border-color: var(--danger); color: #fff; font-weight: 600; }
+.btn:disabled { opacity: .55; cursor: default; }
+.switch { width: 52px; height: 30px; border-radius: 999px; border: 0; padding: 3px; background: var(--line-3); display: flex; justify-content: flex-start; flex-shrink: 0; transition: background .15s; }
+.switch span { width: 24px; height: 24px; border-radius: 50%; background: var(--muted-2); transition: background .15s; }
+.switch[aria-checked="true"] { background: var(--accent); justify-content: flex-end; }
+.switch[aria-checked="true"] span { background: var(--accent-ink); }
+.switch:disabled { opacity: .6; }
+
+/* ---------- плагины ---------- */
+.plug-folder { flex-direction: row; flex-wrap: wrap; align-items: center; gap: 16px; padding: 18px 20px; border-radius: 20px; }
+.plug-folder-ico { width: 44px; height: 44px; border-radius: 12px; background: var(--raise); color: var(--accent-text); display: grid; place-items: center; flex-shrink: 0; }
+.plug-list { display: flex; flex-direction: column; gap: 12px; }
+.plug-row { display: flex; flex-wrap: wrap; align-items: center; gap: 14px; padding: 16px 18px; border-radius: 20px; background: var(--col); border: 1px solid var(--line-soft); }
+.plug-row.st-on { border-color: var(--ok-line); }
+.plug-row.st-err { border-color: var(--danger-line); }
+.plug-row.st-none { border-style: dashed; border-color: var(--line-3); }
+.plug-ico { width: 48px; height: 48px; border-radius: 14px; background: var(--raise); color: var(--muted); display: grid; place-items: center; flex-shrink: 0; }
+.plug-ico.on { background: var(--accent); color: var(--accent-ink); }
+.plug-row.st-err .plug-ico { color: var(--danger); }
+.plug-row.st-none .plug-ico { color: var(--faint); background: transparent; border: 1px dashed var(--line-3); }
+.plug-name { font-size: 16px; font-weight: 600; }
+.plug-file { font-size: 12px; color: var(--faint); margin-top: 4px; overflow-wrap: anywhere; }
+.plug-detail { font-size: 12px; color: var(--muted-2); margin-top: 4px; }
+.plug-row.st-err .plug-detail { color: var(--danger-text); }
+.plug-row.st-wait .plug-detail { color: var(--warn-text); }
+.plug-chip { display: inline-flex; align-items: center; gap: 6px; padding: 3px 9px; border-radius: 999px; font-size: 12px; background: var(--raise); color: var(--muted); }
+.plug-chip i { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+.plug-chip.st-on { background: var(--ok-bg); color: var(--accent-text); }
+.plug-chip.st-wait { background: var(--warn-bg); color: var(--warn-text); }
+.plug-chip.st-err { background: var(--danger-line); color: var(--danger-text); }
+.plug-chip.st-none { color: var(--faint); }
+.plug-drop { padding: 16px; border-radius: 18px; border: 1.5px dashed var(--line-3); color: var(--muted-2); font-size: 13px; text-align: center; }
+.drawer-back { position: fixed; inset: 0; z-index: 60; background: rgba(5,6,8,.6); display: flex; justify-content: flex-end; }
+.drawer { width: min(520px, 100%); height: 100%; box-sizing: border-box; overflow: auto; padding: 24px; background: var(--panel); border-left: 1px solid var(--line-2); display: flex; flex-direction: column; gap: 18px; box-shadow: -20px 0 60px var(--shadow); }
+.stat.mini { flex: 1 1 130px; padding: 14px 16px; border-radius: 16px; }
+.stat.mini .stat-label { font-size: 12px; }
+.stat.mini .stat-value { font-size: 20px; margin-top: 6px; white-space: nowrap; }
+.stat-value.accent { color: var(--accent-text); }
+.stat-value.warn { color: var(--warn-text); }
+.plug-form label { padding: 12px 16px; font-size: 14px; cursor: pointer; }
+.input-sm { height: 36px; width: auto; min-width: 140px; padding: 0 10px; border-radius: 10px; font-size: 13px; }
+.cb { width: 20px; height: 20px; accent-color: var(--accent-text); margin: 0; flex-shrink: 0; }
+
+/* ---------- окна: чек и удаление ---------- */
+.modal-sm { width: min(420px, 100%); }
+.del-preview { padding: 10px 12px; border-radius: 10px; background: var(--field); max-height: 72px; overflow: hidden; white-space: pre-wrap; }
+.del-opt { display: flex; gap: 12px; align-items: flex-start; padding: 12px 14px; border-radius: 14px; background: var(--bg-2); border: 1px solid var(--line-2); cursor: pointer; }
+.del-opt input { accent-color: var(--accent-text); margin: 3px 0 0; width: 16px; height: 16px; flex-shrink: 0; }
+.del-opt.danger input { accent-color: var(--danger); }
+.del-opt > span { display: flex; flex-direction: column; gap: 3px; }
+.del-opt b { font-weight: 600; font-size: 14px; }
+.del-opt.sel { border-color: var(--ok-line); }
+.del-opt.danger.sel { border-color: var(--danger-line); }
+.del-opt.off { opacity: .55; cursor: not-allowed; }
+
+/* ---------- карточка клиента: чеки ---------- */
+.client-receipts { border-radius: 14px; background: var(--field); border: 1px solid var(--line-soft); }
+.client-receipt { display: flex; align-items: center; gap: 10px; padding: 9px 14px; border-bottom: 1px solid var(--line-soft); font-size: 13px; }
+.client-receipt:last-child { border-bottom: 0; }
+.client-receipt .mono:first-child { color: var(--faint); font-size: 12px; }
+.cr-what { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); }
+.cr-sum { font-weight: 600; white-space: nowrap; }
+.cr-sum.st-wait { color: var(--warn-text); }
+.cr-sum.st-refund { color: var(--faint); text-decoration: line-through; }
+.client-receipt.total { justify-content: space-between; font-weight: 600; }
+.client-receipt.total .mono { color: var(--accent-text); }
+
+/* ---------- страница «Чеки» ---------- */
+.plugin-badge { font-size: 10px; letter-spacing: .08em; text-transform: uppercase; padding: 3px 7px; border-radius: 6px; border: 1px solid var(--line-3); color: var(--muted-2); }
+.select-pill { display: flex; align-items: center; gap: 8px; height: 44px; padding: 0 12px; border-radius: 12px; background: var(--field); border: 1px solid var(--line-field); }
+.select-pill span { font-size: 13px; color: var(--muted-2); }
+.select-pill select { background: transparent; border: 0; color: var(--text); font: inherit; outline: none; max-width: 220px; }
+.select-pill option { background: var(--panel); }
+.rc-grid { display: flex; flex-wrap: wrap; gap: 20px; align-items: stretch; }
+.rc-chart { flex: 2 1 520px; min-width: 0; }
+.rc-top { flex: 1 1 300px; min-width: 0; gap: 10px; }
+.bars { display: flex; align-items: flex-end; gap: 10px; height: 220px; padding-top: 18px; }
+.bar-col { flex: 1; min-width: 0; height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: flex-end; gap: 6px; }
+.bar { width: 100%; max-width: 44px; min-height: 2px; border-radius: 6px 6px 2px 2px; background: var(--line-3); }
+.bar-col:hover .bar { background: var(--muted-2); }
+.bar.now { background: var(--accent); }
+.bar-val { font-family: var(--mono); font-size: 11px; color: var(--muted-2); min-height: 14px; }
+.bar-lbl { font-size: 12px; color: var(--faint); }
+.top-row { display: flex; flex-direction: column; gap: 6px; padding: 8px 10px; margin: 0 -10px; border-radius: 12px; border: 0; background: transparent; color: var(--text); text-align: left; }
+.top-row:hover, .top-row[aria-pressed="true"] { background: var(--raise); }
+.top-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
+.top-bar { height: 6px; border-radius: 6px; background: var(--raise); overflow: hidden; }
+.top-bar i { display: block; height: 100%; border-radius: 6px; background: var(--accent); }
+.ch-mini { margin-left: 6px; font-size: 11px; font-weight: 500; }
+.ch-mini.tg { color: var(--tg-fg); }
+.ch-mini.wa { color: var(--wa-fg); }
+.rc-table-head { padding: 16px 22px; border-bottom: 1px solid var(--line-soft); gap: 12px; }
+.rc-table-head h2 { font-size: 16px; }
+/* 7 строк видно, остальные — прокруткой; шапка остаётся наверху */
+.rc-scroll { overflow: auto; max-height: 335px; }
+.rc-table { width: 100%; min-width: 720px; border-collapse: collapse; font-size: 13px; }
+.rc-table th { position: sticky; top: 0; z-index: 1; height: 40px; padding: 0 8px; text-align: left; font-weight: 500; color: var(--muted-2); background: var(--col); box-shadow: 0 1px 0 var(--line-soft); }
+.rc-table td { height: 42px; padding: 0 8px; border-top: 1px solid var(--line); }
+.rc-table th:first-child, .rc-table td:first-child { padding-left: 22px; }
+.rc-table th:last-child, .rc-table td:last-child { padding-right: 22px; }
+.rc-table .num { text-align: right; font-weight: 600; }
+.rc-table .muted { color: var(--muted); }
+.rc-table .nowrap { white-space: nowrap; }
+.rc-table .file { color: var(--tg-fg); }
+.rc-st { padding: 3px 9px; border-radius: 999px; font-size: 12px; background: var(--ok-bg); color: var(--accent-text); }
+.rc-st.st-wait { background: var(--warn-bg); color: var(--warn-text); }
+.rc-st.st-refund { background: var(--raise); color: var(--muted); }
+.link-btn { padding: 0; border: 0; background: none; color: var(--text); font: inherit; font-weight: 500; cursor: pointer; }
+.link-btn:hover { color: var(--accent-text); text-decoration: underline; }
