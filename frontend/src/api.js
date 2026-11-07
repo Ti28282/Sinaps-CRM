@@ -33,8 +33,9 @@ export const api = {
   revealPlugin: (file) => call('RevealPlugin', file),
 
   // плагин «Чеки»
-  markReceipt: (req) => call('MarkReceipt', req),
-  unmarkReceipt: (chatId, msgId) => call('UnmarkReceipt', chatId, msgId),
+  createReceipt: (req) => call('CreateReceipt', req),
+  updateReceipt: (id, req) => call('UpdateReceipt', id, req),
+  deleteReceipt: (id) => call('DeleteReceipt', id),
   receipts: (chatId = 0, period = 'year') => call('Receipts', { chatId, period }),
   chekiSummary: () => call('ChekiSummary'),
   exportReceipts: (chatId = 0, period = 'year') => call('ExportReceipts', { chatId, period }),
@@ -135,16 +136,5 @@ export function applyTheme(theme) {
 
 // плагин включён и работает
 export const pluginOn = (plugins, id) => !!plugins?.items?.some((p) => p.id === id && p.status === 'on')
-
-// «Что можно отметить как чек» из настроек плагина
-export function canBeReceipt(kinds, m) {
-  if (m.mediaKind !== 'file' && m.mediaKind !== 'photo') return false
-  const name = (m.fileName || '').toLowerCase()
-  const pdf = m.mediaKind === 'file' && name.endsWith('.pdf')
-  const img = m.mediaKind === 'photo' || (m.mediaKind === 'file' && /\.(jpe?g|png|webp|heic|gif|bmp)$/.test(name))
-  if (kinds === 'Только PDF') return pdf
-  if (kinds === 'Любой файл') return true
-  return pdf || img
-}
 
 export const currencySymbol = (label = '') => (label.includes('сом') ? 'сом' : label.includes('₸') ? '₸' : label.includes('$') ? '$' : '₽')

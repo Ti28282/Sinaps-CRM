@@ -23,7 +23,6 @@ var errChekiOff = errors.New("плагин «Чеки» выключен — в�
 
 // chekiSettings — настройки плагина с запасными значениями.
 type chekiSettings struct {
-	Kinds       string // PDF и фото | Только PDF | Любой файл
 	Currency    string // символ: ₽, сом, ₸, $
 	SumToDeal   bool
 	FirstToDeal bool
@@ -44,7 +43,6 @@ func (a *App) cheki() chekiSettings {
 		return def
 	}
 	return chekiSettings{
-		Kinds:       str("kinds", "PDF и фото"),
 		Currency:    currencySymbol(str("currency", "₽ рубль")),
 		SumToDeal:   flag("sumToDeal", true),
 		FirstToDeal: flag("firstToDeal", true),
@@ -63,92 +61,110 @@ func currencySymbol(label string) string {
 	return "₽"
 }
 
-// canBeReceipt — подходит ли сообщение под настройку «Что можно отметить как чек».
-func canBeReceipt(kinds string, m store.Message) bool {
-	pdf := m.MediaKind == "file" && strings.EqualFold(filepath.Ext(m.FileName), ".pdf")
-	img := m.MediaKind == "photo" || (m.MediaKind == "file" && isImageName(m.FileName))
-	switch kinds {
-	case "Только PDF":
-		return pdf
-	case "Любой файл":
-		return m.MediaKind == "file" || m.MediaKind == "photo"
-	}
-	return pdf || img
-}
-
-func isImageName(n string) bool {
-	switch strings.ToLower(filepath.Ext(n)) {
-	case ".jpg", ".jpeg", ".png", ".webp", ".heic", ".gif", ".bmp":
-		return true
-	}
-	return false
-}
-
-// ReceiptReq — форма «Чек от клиента».
+// ReceiptReq — форма «Новый чек» на странице плагина.
 type ReceiptReq struct {
 	ChatID int64  `json:"chatId"`
-	MsgID  int64  `json:"msgId"`
 	Amount int64  `json:"amount"`
-	Date   string `json:"date"`   // 2026-10-28
+	Date   string `json:"date"`   // 2026-11-07; пусто — сегодня
 	Status string `json:"status"` // paid | wait | refund
 	What   string `json:"what"`
 }
 
-// MarkReceipt отмечает файл клиента как чек (или сохраняет правку).
-func (a *App) MarkReceipt(req ReceiptReq) (store.Receipt, error) {
+func (r ReceiptReq) paidAt() (int64, error) {
+	if r.Date == "" {
+		return time.Now().Unix(), nil
+	}
+	t, err := time.ParseInLocation("2006-01-02", r.Date, time.Local)
+	if err != nil {
+		return 0, errors.New("дата оплаты в формате ДД.ММ.ГГГГ")
+	}
+	return t.Add(12 * time.Hour).Unix(), nil // середина дня — без сдвига дат между поясами
+}
+
+func (r ReceiptReq) check() error {
+	if r.Amount <= 0 && r.Status != "wait" {
+		return errors.New("укажите сумму чека")
+	}
+	return nil
+}
+
+// CreateReceipt — новый чек: клиент из воронки, сумма, за что, дата, статус.
+func (a *App) CreateReceipt(req ReceiptReq) (store.Receipt, error) {
 	if !a.pluginActive(chekiID) {
 		return store.Receipt{}, errChekiOff
 	}
-	cfg := a.cheki()
-	m, err := a.st.MessageByMsg(a.ctx, req.ChatID, req.MsgID)
+	if req.ChatID == 0 {
+		return store.Receipt{}, errors.New("выберите клиента")
+	}
+	if err := req.check(); err != nil {
+		return store.Receipt{}, err
+	}
+	paidAt, err := req.paidAt()
 	if err != nil {
-		return store.Receipt{}, errors.New("сообщение не найдено")
+		return store.Receipt{}, err
 	}
-	if !canBeReceipt(cfg.Kinds, m) {
-		return store.Receipt{}, fmt.Errorf("по настройкам плагина как чек можно отметить: %s", strings.ToLower(cfg.Kinds))
-	}
-	if req.Amount <= 0 && req.Status != "wait" {
-		return store.Receipt{}, errors.New("укажите сумму чека")
-	}
-	paidAt := m.Date
-	if req.Date != "" {
-		t, err := time.ParseInLocation("2006-01-02", req.Date, time.Local)
-		if err != nil {
-			return store.Receipt{}, errors.New("дата оплаты в формате ДД.ММ.ГГГГ")
-		}
-		paidAt = t.Add(12 * time.Hour).Unix() // середина дня — без сдвига дат между поясами
-	}
-	r, created, err := a.st.SaveReceipt(a.ctx, store.Receipt{
-		ChatID: req.ChatID, MsgID: req.MsgID, Amount: req.Amount, Currency: cfg.Currency,
-		Status: req.Status, What: req.What, PaidAt: paidAt,
+	cfg := a.cheki()
+	r, err := a.st.CreateReceipt(a.ctx, store.Receipt{
+		ChatID: req.ChatID, Amount: req.Amount, Currency: cfg.Currency, Status: req.Status, What: req.What, PaidAt: paidAt,
 	})
 	if err != nil {
 		return r, err
 	}
-	verb := "Чек"
-	if !created {
-		verb = "Чек изменён"
-	}
-	_ = a.st.AddEvent(a.ctx, req.ChatID, "receipt", fmt.Sprintf("%s · %s · %s", verb, fmtMoney(r.Amount, r.Currency), store.ReceiptStatusName(r.Status)))
-	a.afterReceipts(req.ChatID, cfg, r.Status == "paid")
+	_ = a.st.AddEvent(a.ctx, r.ChatID, "receipt", receiptEvent("Чек", r))
+	a.afterReceipts(r.ChatID, cfg, r.Status == "paid")
 	return r, nil
 }
 
-// UnmarkReceipt снимает отметку «чек». Файл в переписке остаётся.
-func (a *App) UnmarkReceipt(chatID, msgID int64) error {
+// UpdateReceipt — правка чека из истории.
+func (a *App) UpdateReceipt(id int64, req ReceiptReq) (store.Receipt, error) {
+	if !a.pluginActive(chekiID) {
+		return store.Receipt{}, errChekiOff
+	}
+	old, err := a.st.ReceiptByID(a.ctx, id)
+	if err != nil {
+		return old, err
+	}
+	if err := req.check(); err != nil {
+		return old, err
+	}
+	paidAt, err := req.paidAt()
+	if err != nil {
+		return old, err
+	}
+	r, err := a.st.UpdateReceipt(a.ctx, store.Receipt{
+		ID: id, Amount: req.Amount, Currency: old.Currency, Status: req.Status, What: req.What, PaidAt: paidAt,
+	})
+	if err != nil {
+		return r, err
+	}
+	_ = a.st.AddEvent(a.ctx, r.ChatID, "receipt", receiptEvent("Чек изменён", r))
+	a.afterReceipts(r.ChatID, a.cheki(), r.Status == "paid" && old.Status != "paid")
+	return r, nil
+}
+
+// DeleteReceipt удаляет чек из истории.
+func (a *App) DeleteReceipt(id int64) error {
 	if !a.pluginActive(chekiID) {
 		return errChekiOff
 	}
-	r, err := a.st.ReceiptByMsg(a.ctx, chatID, msgID)
+	r, err := a.st.ReceiptByID(a.ctx, id)
 	if err != nil {
-		return nil // отметки и так нет
+		return nil // уже удалён
 	}
-	if err := a.st.DeleteReceipt(a.ctx, chatID, msgID); err != nil {
+	if err := a.st.DeleteReceipt(a.ctx, id); err != nil {
 		return err
 	}
-	_ = a.st.AddEvent(a.ctx, chatID, "receipt", "Отметка «чек» снята · "+fmtMoney(r.Amount, r.Currency))
-	a.afterReceipts(chatID, a.cheki(), false)
+	_ = a.st.AddEvent(a.ctx, r.ChatID, "receipt", "Чек удалён · "+fmtMoney(r.Amount, r.Currency))
+	a.afterReceipts(r.ChatID, a.cheki(), false)
 	return nil
+}
+
+func receiptEvent(verb string, r store.Receipt) string {
+	s := fmt.Sprintf("%s · %s · %s", verb, fmtMoney(r.Amount, r.Currency), store.ReceiptStatusName(r.Status))
+	if r.What != "" {
+		s += " · " + r.What
+	}
+	return s
 }
 
 // afterReceipts — «Сумма чеков → Сумма сделки» и «Первый чек → Сделка».

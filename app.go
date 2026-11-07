@@ -26,7 +26,7 @@ import (
 	"sinaps-crm/internal/whatsapp"
 )
 
-const version = "0.2.0"
+const version = "0.3.0"
 
 // App — всё, что видит фронт: каждый экспортируемый метод доступен как
 // window.go.main.App.<Method>() и возвращает Promise.

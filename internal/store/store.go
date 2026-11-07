@@ -122,12 +122,13 @@ CREATE TABLE IF NOT EXISTS hidden_messages(
   PRIMARY KEY(chat_id, msg_id)
 );
 
--- плагин «Чеки»: файлы клиентов, отмеченные как чек. Без внешнего ключа на chats —
+-- плагин «Чеки»: чеки по клиентам из воронки. Без внешнего ключа на chats —
 -- деньги не должны пропадать, если клиента убрали из CRM; название клиента копируется.
+-- msg_id — сообщение-файл, если чек был отмечен в переписке (0 — создан в плагине).
 CREATE TABLE IF NOT EXISTS receipts(
   id         INTEGER PRIMARY KEY,
   chat_id    INTEGER NOT NULL,
-  msg_id     INTEGER NOT NULL,
+  msg_id     INTEGER NOT NULL DEFAULT 0,
   chat_title TEXT    NOT NULL DEFAULT '',
   channel    TEXT    NOT NULL DEFAULT '',
   file_name  TEXT    NOT NULL DEFAULT '',
@@ -136,10 +137,10 @@ CREATE TABLE IF NOT EXISTS receipts(
   status     TEXT    NOT NULL DEFAULT 'paid',   -- paid | wait | refund
   what       TEXT    NOT NULL DEFAULT '',
   paid_at    INTEGER NOT NULL,
-  created_at INTEGER NOT NULL,
-  UNIQUE(chat_id, msg_id)
+  created_at INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_receipts_paid ON receipts(paid_at);
+CREATE INDEX IF NOT EXISTS idx_receipts_chat ON receipts(chat_id);
 `
 
 var Stages = []string{"new", "sent", "replied", "deal", "lost"}
@@ -261,7 +262,41 @@ func (s *Store) migrate() error {
 			}
 		}
 	}
-	return nil
+	return s.migrateReceipts()
+}
+
+// migrateReceipts: в 0.2.0 чек был привязан к сообщению (UNIQUE(chat_id, msg_id)).
+// С 0.3.0 чеки создаются в плагине, у одного клиента их сколько угодно — снимаем ограничение.
+func (s *Store) migrateReceipts() error {
+	var ddl string
+	if err := s.db.QueryRow(`SELECT sql FROM sqlite_master WHERE type='table' AND name='receipts'`).Scan(&ddl); err != nil {
+		return nil
+	}
+	if !strings.Contains(strings.ReplaceAll(ddl, " ", ""), "UNIQUE(chat_id,msg_id)") {
+		return nil
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	for _, q := range []string{
+		`CREATE TABLE receipts_v3(
+  id INTEGER PRIMARY KEY, chat_id INTEGER NOT NULL, msg_id INTEGER NOT NULL DEFAULT 0,
+  chat_title TEXT NOT NULL DEFAULT '', channel TEXT NOT NULL DEFAULT '', file_name TEXT NOT NULL DEFAULT '',
+  amount INTEGER NOT NULL DEFAULT 0, currency TEXT NOT NULL DEFAULT '₽', status TEXT NOT NULL DEFAULT 'paid',
+  what TEXT NOT NULL DEFAULT '', paid_at INTEGER NOT NULL, created_at INTEGER NOT NULL)`,
+		`INSERT INTO receipts_v3 SELECT id,chat_id,msg_id,chat_title,channel,file_name,amount,currency,status,what,paid_at,created_at FROM receipts`,
+		`DROP TABLE receipts`,
+		`ALTER TABLE receipts_v3 RENAME TO receipts`,
+		`CREATE INDEX IF NOT EXISTS idx_receipts_paid ON receipts(paid_at)`,
+		`CREATE INDEX IF NOT EXISTS idx_receipts_chat ON receipts(chat_id)`,
+	} {
+		if _, err := tx.Exec(q); err != nil {
+			return fmt.Errorf("receipts: %w", err)
+		}
+	}
+	return tx.Commit()
 }
 
 func (s *Store) Close() error { return s.db.Close() }

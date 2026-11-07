@@ -59,7 +59,6 @@ const find = (id) => chats.find((c) => c.id === id)
 
 // ---- плагины (демо) ----
 const chekiFields = [
-  { key: 'kinds', label: 'Что можно отметить как чек', type: 'select', options: ['PDF и фото', 'Только PDF', 'Любой файл'], default: 'PDF и фото' },
   { key: 'currency', label: 'Валюта по умолчанию', type: 'select', options: ['₽ рубль', 'сом', '₸ тенге', '$ доллар'], default: '₽ рубль' },
   { key: 'sumToDeal', label: 'Сумма чеков → «Сумма сделки» клиента', type: 'bool', default: true },
   { key: 'firstToDeal', label: 'Первый чек переводит клиента в «Сделка»', type: 'bool', default: true },
@@ -67,7 +66,7 @@ const chekiFields = [
 const chekiDefaults = Object.fromEntries(chekiFields.map((f) => [f.key, f.default]))
 const pluginSettings = {}
 const demoPlugins = [
-  { file: 'cheki.sinaps', id: 'cheki', name: 'Чеки', version: '0.1', description: 'Отмечайте файлы клиентов как чеки и смотрите статистику оплат', icon: 'receipt', requires: [], fields: chekiFields, enabled: true, base: 'ok' },
+  { file: 'cheki.sinaps', id: 'cheki', name: 'Чеки', version: '0.2', description: 'Чеки по клиентам из воронки: сумма, за что, статистика и история', icon: 'receipt', requires: [], fields: chekiFields, enabled: true, base: 'ok' },
   { file: 'moy-nalog.sinaps', id: 'moy-nalog', name: '«Мой налог»', version: '0.1', description: 'Чек самозанятого по отмеченному чеку', icon: 'puzzle', requires: ['cheki'], fields: [], enabled: false, base: 'error', error: 'Эта версия CRM не умеет запускать плагин «moy-nalog»' },
   { file: 'old-reports.sinaps', id: 'reports', name: 'Отчёты', version: '0.3', description: '', icon: 'puzzle', requires: [], fields: [], enabled: false, base: 'error', error: 'Нужна CRM v1.4 или новее' },
   { file: 'photos.sinaps', id: '', name: '', version: '', description: '', icon: '', requires: [], fields: [], enabled: false, base: 'invalid', error: 'В архиве нет manifest.json' },
@@ -99,6 +98,14 @@ let receipts = [
   [ml.id, 'Клиника «Мед-Лайн»', 'Консультация', 'check.pdf', 'paid', 12000, 200],
 ].map(([chatId, chatTitle, what, fileName, status, amount, d], i) => ({ id: i + 1, chatId, msgId: i === 0 ? 600 : 9000 + i, chatTitle, channel: 'tg', what, fileName, status, amount, currency: '₽', paidAt: ago(d), createdAt: ago(d) }))
 const MONTHS = ['янв', 'фев', 'мар', 'апр', 'май', 'июн', 'июл', 'авг', 'сен', 'окт', 'ноя', 'дек']
+function afterReceipts(chatId, paid) {
+  const c = find(chatId)
+  if (c) {
+    c.amount = receipts.filter((x) => x.chatId === chatId && x.status === 'paid').reduce((a, x) => a + x.amount, 0)
+    if (paid) c.stage = 'deal'
+  }
+  emit('receipts:changed', chatId); emit('chats:changed')
+}
 function demoReport(chatId, period) {
   const d = new Date()
   const from = period === 'all' ? 0 : period === 'quarter' ? new Date(d.getFullYear(), d.getMonth() - 2, 1).getTime() / 1000 : new Date(d.getFullYear(), 0, 1).getTime() / 1000
@@ -119,7 +126,7 @@ let settings = { tgApiId: 0, hasApiHash: false, tgFolderId: 0, tgFolderName: '',
 const setStatus = (s) => { status = s; emit('tg:status', s) }
 
 export const mock = {
-  GetInfo: async () => ({ version: '0.2.0-demo', dataDir: '~/.config/SINAPS-CRM' }),
+  GetInfo: async () => ({ version: '0.3.0-demo', dataDir: '~/.config/SINAPS-CRM' }),
   OpenDataDir: async () => {},
   GetSettings: async () => ({ ...settings }),
   SaveSettings: async (p) => { Object.assign(settings, Object.fromEntries(Object.entries(p).filter(([, v]) => v != null))) },
@@ -134,17 +141,20 @@ export const mock = {
   ChoosePluginsDir: async () => pluginsView(),
   InstallPlugin: async (path) => { const file = path.split('/').pop(); if (!demoPlugins.some((p) => p.file === file)) demoPlugins.push({ file, id: file.replace(/\.sinaps$/, ''), name: file.replace(/\.sinaps$/, ''), version: '0.1', description: '', icon: 'puzzle', requires: [], fields: [], enabled: false, base: 'error', error: 'Эта версия CRM не умеет запускать этот плагин' }); const v = pluginsView(); emit('plugins:changed', v); return v },
   RevealPlugin: async () => {},
-  MarkReceipt: async (r) => {
+  CreateReceipt: async (r) => {
     await wait(200)
-    const m = (messages[r.chatId] || []).find((x) => x.msgId === r.msgId); const c = find(r.chatId)
-    const paidAt = r.date ? Math.floor(new Date(r.date + 'T12:00:00').getTime() / 1000) : m.date
-    const rec = { id: r.chatId * 1000 + r.msgId, chatId: r.chatId, msgId: r.msgId, chatTitle: c.title, channel: c.channel, fileName: m.fileName || 'Фото', amount: r.amount, currency: '₽', status: r.status || 'paid', what: r.what || '', paidAt, createdAt: now }
-    receipts = receipts.filter((x) => !(x.chatId === r.chatId && x.msgId === r.msgId)); receipts.push(rec)
-    c.amount = receipts.filter((x) => x.chatId === r.chatId && x.status === 'paid').reduce((a, x) => a + x.amount, 0)
-    if (rec.status === 'paid') c.stage = 'deal'
-    emit('receipts:changed', r.chatId); emit('chats:changed'); return rec
+    const c = find(r.chatId); if (!c) throw new Error('выберите клиента')
+    if (!(r.amount > 0) && r.status !== 'wait') throw new Error('укажите сумму чека')
+    const paidAt = r.date ? Math.floor(new Date(r.date + 'T12:00:00').getTime() / 1000) : now
+    const rec = { id: Math.max(0, ...receipts.map((x) => x.id)) + 1, chatId: r.chatId, msgId: 0, chatTitle: c.title, channel: c.channel, fileName: '', amount: r.amount, currency: '₽', status: r.status || 'paid', what: (r.what || '').trim(), paidAt, createdAt: now }
+    receipts.push(rec); afterReceipts(r.chatId, rec.status === 'paid'); return rec
   },
-  UnmarkReceipt: async (chatId, msgId) => { receipts = receipts.filter((x) => !(x.chatId === chatId && x.msgId === msgId)); emit('receipts:changed', chatId); emit('chats:changed') },
+  UpdateReceipt: async (id, r) => {
+    const rec = receipts.find((x) => x.id === id); if (!rec) throw new Error('чек не найден')
+    Object.assign(rec, { amount: r.amount, status: r.status, what: (r.what || '').trim(), paidAt: r.date ? Math.floor(new Date(r.date + 'T12:00:00').getTime() / 1000) : rec.paidAt })
+    afterReceipts(rec.chatId, rec.status === 'paid'); return rec
+  },
+  DeleteReceipt: async (id) => { const rec = receipts.find((x) => x.id === id); receipts = receipts.filter((x) => x.id !== id); if (rec) afterReceipts(rec.chatId, false) },
   Receipts: async ({ chatId, period }) => demoReport(chatId, period),
   ChekiSummary: async () => ({ count: receipts.length, sumYear: receipts.filter((r) => r.status === 'paid').reduce((a, r) => a + r.amount, 0), clients: new Set(receipts.map((r) => r.chatId)).size, year: new Date().getFullYear(), currency: '₽' }),
   ExportReceipts: async () => { await wait(400); return { path: '/home/timur/sinaps-cheki.xlsx', count: receipts.length } },

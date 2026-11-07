@@ -92,17 +92,17 @@ export default function App() {
         </div>
         <nav className="nav" aria-label="Основное">
           {NAV.map((n) => (
-            <button key={n.id} type="button" aria-current={page === n.id ? 'page' : undefined} onClick={() => go(n.id)}>
+            <button key={n.id} type="button" title={n.label} aria-current={page === n.id ? 'page' : undefined} onClick={() => go(n.id)}>
               <Icon name={n.icon} />
-              {n.label}
+              <span className="nav-label">{n.label}</span>
               {n.id === 'chats' && unread > 0 && <span className="count">{unread}</span>}
             </button>
           ))}
-          {pluginNav.length > 0 && <div className="nav-group">Плагины</div>}
+          {pluginNav.length > 0 && <div className="nav-group"><span className="nav-label">Плагины</span></div>}
           {pluginNav.map((n) => (
-            <button key={n.id} type="button" aria-current={page === n.id ? 'page' : undefined} onClick={() => go(n.id)}>
+            <button key={n.id} type="button" title={n.label} aria-current={page === n.id ? 'page' : undefined} onClick={() => go(n.id)}>
               <Icon name={n.icon} />
-              {n.label}
+              <span className="nav-label">{n.label}</span>
             </button>
           ))}
         </nav>
@@ -147,7 +147,7 @@ export default function App() {
         {page === 'chats' && <Chats chats={chats} openId={openChat} setOpenId={setOpenChat} toast={toast} tg={tg} wa={wa} plugins={plugins} />}
         {page === 'broadcast' && <Broadcast chats={chats} settings={settings} reloadSettings={reloadSettings} tg={tg} toast={toast} />}
         {page === 'settings' && <Settings settings={settings} reloadSettings={reloadSettings} toast={toast} plugins={plugins} setPlugins={setPlugins} openPage={go} />}
-        {page === 'cheki' && pluginOn(plugins, 'cheki') && <Receipts toast={toast} openChat={(id) => go('chats', id)} />}
+        {page === 'cheki' && pluginOn(plugins, 'cheki') && <Receipts toast={toast} chats={chats} openChat={(id) => go('chats', id)} />}
         {page === 'connect' && <Connect tg={tg} wa={wa} settings={settings} reloadSettings={reloadSettings} toast={toast} done={() => go('pipeline')} />}
       </main>
 

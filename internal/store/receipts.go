@@ -47,59 +47,70 @@ func scanReceipt(row interface{ Scan(...any) error }) (Receipt, error) {
 	return r, err
 }
 
-// SaveReceipt отмечает сообщение как чек или обновляет уже отмеченный.
-// created=true — чек новый (а не правка).
-func (s *Store) SaveReceipt(ctx context.Context, r Receipt) (Receipt, bool, error) {
+// CreateReceipt — новый чек по клиенту из воронки (создаётся в плагине «Чеки»).
+func (s *Store) CreateReceipt(ctx context.Context, r Receipt) (Receipt, error) {
+	if err := checkReceipt(&r); err != nil {
+		return r, err
+	}
+	c, err := s.Chat(ctx, r.ChatID)
+	if err != nil {
+		return r, errors.New("клиент не найден")
+	}
+	if r.PaidAt == 0 {
+		r.PaidAt = time.Now().Unix()
+	}
+	res, err := s.db.ExecContext(ctx, `INSERT INTO receipts(chat_id,msg_id,chat_title,channel,file_name,amount,currency,status,what,paid_at,created_at)
+VALUES(?,?,?,?,?,?,?,?,?,?,?)`,
+		r.ChatID, r.MsgID, c.Title, c.Channel, r.FileName, r.Amount, r.Currency, r.Status, r.What, r.PaidAt, time.Now().Unix())
+	if err != nil {
+		return r, err
+	}
+	id, _ := res.LastInsertId()
+	return s.ReceiptByID(ctx, id)
+}
+
+// UpdateReceipt меняет сумму, статус, «за что» и дату. Клиента у чека не меняем.
+func (s *Store) UpdateReceipt(ctx context.Context, r Receipt) (Receipt, error) {
+	if err := checkReceipt(&r); err != nil {
+		return r, err
+	}
+	res, err := s.db.ExecContext(ctx, `UPDATE receipts SET amount=?, currency=?, status=?, what=?, paid_at=? WHERE id=?`,
+		r.Amount, r.Currency, r.Status, r.What, r.PaidAt, r.ID)
+	if err != nil {
+		return r, err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return r, errors.New("чек не найден")
+	}
+	return s.ReceiptByID(ctx, r.ID)
+}
+
+func checkReceipt(r *Receipt) error {
 	if !receiptStatuses[r.Status] {
 		r.Status = "paid"
 	}
 	if r.Amount < 0 {
-		return r, false, errors.New("сумма не может быть меньше нуля")
-	}
-	c, err := s.Chat(ctx, r.ChatID)
-	if err != nil {
-		return r, false, errors.New("клиент не найден")
-	}
-	m, err := s.MessageByMsg(ctx, r.ChatID, r.MsgID)
-	if err != nil {
-		return r, false, errors.New("сообщение не найдено")
-	}
-	if r.FileName == "" {
-		r.FileName = m.FileName
-		if r.FileName == "" && m.MediaKind == "photo" {
-			r.FileName = "Фото"
-		}
-	}
-	if r.PaidAt == 0 {
-		r.PaidAt = m.Date
+		return errors.New("сумма не может быть меньше нуля")
 	}
 	if strings.TrimSpace(r.Currency) == "" {
 		r.Currency = "₽"
 	}
-	var existed int
-	_ = s.db.QueryRowContext(ctx, `SELECT 1 FROM receipts WHERE chat_id=? AND msg_id=?`, r.ChatID, r.MsgID).Scan(&existed)
-	now := time.Now().Unix()
-	_, err = s.db.ExecContext(ctx, `INSERT INTO receipts(chat_id,msg_id,chat_title,channel,file_name,amount,currency,status,what,paid_at,created_at)
-VALUES(?,?,?,?,?,?,?,?,?,?,?)
-ON CONFLICT(chat_id,msg_id) DO UPDATE SET chat_title=excluded.chat_title, channel=excluded.channel,
-  file_name=excluded.file_name, amount=excluded.amount, currency=excluded.currency, status=excluded.status,
-  what=excluded.what, paid_at=excluded.paid_at`,
-		r.ChatID, r.MsgID, c.Title, c.Channel, r.FileName, r.Amount, r.Currency, r.Status, strings.TrimSpace(r.What), r.PaidAt, now)
-	if err != nil {
-		return r, false, err
+	r.What = strings.TrimSpace(r.What)
+	return nil
+}
+
+func (s *Store) ReceiptByID(ctx context.Context, id int64) (Receipt, error) {
+	r, err := scanReceipt(s.db.QueryRowContext(ctx, `SELECT `+receiptCols+`
+FROM receipts r LEFT JOIN chats c ON c.id=r.chat_id WHERE r.id=?`, id))
+	if errors.Is(err, sql.ErrNoRows) {
+		return r, errors.New("чек не найден")
 	}
-	saved, err := s.ReceiptByMsg(ctx, r.ChatID, r.MsgID)
-	return saved, existed == 0, err
+	return r, err
 }
 
-func (s *Store) ReceiptByMsg(ctx context.Context, chatID, msgID int64) (Receipt, error) {
-	return scanReceipt(s.db.QueryRowContext(ctx, `SELECT `+receiptCols+`
-FROM receipts r LEFT JOIN chats c ON c.id=r.chat_id WHERE r.chat_id=? AND r.msg_id=?`, chatID, msgID))
-}
-
-// DeleteReceipt снимает отметку «чек». Файл и переписка не меняются.
-func (s *Store) DeleteReceipt(ctx context.Context, chatID, msgID int64) error {
-	_, err := s.db.ExecContext(ctx, `DELETE FROM receipts WHERE chat_id=? AND msg_id=?`, chatID, msgID)
+// DeleteReceipt удаляет чек. Переписка не меняется.
+func (s *Store) DeleteReceipt(ctx context.Context, id int64) error {
+	_, err := s.db.ExecContext(ctx, `DELETE FROM receipts WHERE id=?`, id)
 	return err
 }
 
