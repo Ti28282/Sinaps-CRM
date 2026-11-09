@@ -2,37 +2,44 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { api, on, errText, money, STAGES } from '../api.js'
 import { Avatar, Icon } from '../components/ui.jsx'
 
-// Страница плагина «Чеки»: новый чек → статистика → история.
+// Страница плагина «Чеки»: новый чек из частей → статистика → история → по типам.
 const PERIODS = [
   { id: 'quarter', label: 'Квартал' },
   { id: 'year', label: 'Год' },
   { id: 'all', label: 'Всё время' },
 ]
 const STATUS = { paid: 'оплачен', wait: 'ожидает', refund: 'возврат' }
+const PROJECT = 'project'
 const stageTitle = (id) => STAGES.find((s) => s.id === id)?.title || ''
 const short = (n) => (n >= 1_000_000 ? (n / 1_000_000).toLocaleString('ru-RU', { maximumFractionDigits: 1 }) + 'м' : n >= 1000 ? Math.round(n / 1000) + 'к' : String(n))
 const isoDay = (unix) => {
   const d = unix ? new Date(unix * 1000) : new Date()
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
 }
-const digits = (v) => String(v).replace(/\D/g, '')
+const digits = (v) => String(v ?? '').replace(/\D/g, '')
 const spaced = (v) => (digits(v) ? Number(digits(v)).toLocaleString('ru-RU') : '')
+const num = (v) => Number(digits(v) || 0)
+const plural = (n, a, b, c) => (n % 10 === 1 && n % 100 !== 11 ? a : n % 10 >= 2 && n % 10 <= 4 && (n % 100 < 10 || n % 100 >= 20) ? b : c)
+const typeOf = (types, id) => types.find((t) => t.id === id) || { id, label: id.replace(/^c:/, ''), short: id.replace(/^c:/, ''), color: '#8A8F98', inProject: false }
+const emptyLine = (kind = PROJECT) => ({ kind, what: '', amount: '' })
+const toParts = (lines) => lines.map((l) => ({ kind: l.kind, what: l.what, amount: num(l.amount) }))
 
 export default function Receipts({ toast, chats, openChat }) {
   const [chatId, setChatId] = useState(0)
   const [period, setPeriod] = useState('year')
+  const [kind, setKind] = useState('')
   const [rep, setRep] = useState(null)
   const [busy, setBusy] = useState(false)
   const [edit, setEdit] = useState(null) // чек, который правим
 
-  const load = useCallback(() => api.receipts(chatId, period).then(setRep).catch((e) => toast(errText(e), 'err')), [chatId, period, toast])
+  const load = useCallback(() => api.receipts(chatId, period, kind).then(setRep).catch((e) => toast(errText(e), 'err')), [chatId, period, kind, toast])
   useEffect(() => { load() }, [load])
   useEffect(() => on('receipts:changed', () => load()), [load])
 
   async function exportXlsx() {
     setBusy(true)
     try {
-      const r = await api.exportReceipts(chatId, period)
+      const r = await api.exportReceipts(chatId, period, kind)
       if (r.path) toast(`Сохранено чеков: ${r.count} → ${r.path.split(/[\\/]/).pop()}`)
     } catch (e) { toast(errText(e), 'err') } finally { setBusy(false) }
   }
@@ -42,11 +49,19 @@ export default function Receipts({ toast, chats, openChat }) {
     try { await api.deleteReceipt(r.id); toast('Чек удалён') } catch (e) { toast(errText(e), 'err') }
   }
 
+  async function addType(label) {
+    try { await api.addReceiptType(label); await load(); return true } catch (e) { toast(errText(e), 'err'); return false }
+  }
+
   if (!rep) return <div className="page"><p className="hint">Загрузка…</p></div>
   const cur = rep.currency
+  const types = rep.allTypes
   const max = Math.max(1, ...rep.months.map((m) => m.sum))
   const topMax = Math.max(1, ...rep.top.map((t) => t.sum))
   const client = rep.clients.find((c) => c.chatId === chatId)
+  const kindT = kind ? typeOf(types, kind) : null
+  const typesPaid = rep.types.reduce((a, t) => a + t.sum, 0)
+  const filterNote = [client?.title, kindT?.label].filter(Boolean).join(' · ')
 
   return (
     <div className="page">
@@ -56,15 +71,20 @@ export default function Receipts({ toast, chats, openChat }) {
             <h1>Чеки</h1>
             <span className="plugin-badge">плагин</span>
           </div>
-          <p>Выберите клиента из воронки, укажите сумму и за что — чек попадёт в статистику и историю</p>
+          <p>Один чек от клиента можно разбить на части: что идёт в счёт проекта, а что — сверху</p>
         </div>
         <button type="button" className="btn" onClick={exportXlsx} disabled={busy}>{busy ? 'Сохраняем…' : 'Экспорт в Excel'}</button>
       </header>
 
-      <NewReceipt chats={chats} cur={cur} toast={toast} />
+      <NewReceipt chats={chats} types={types} cur={cur} toast={toast} addType={addType} />
 
       <div className="row rc-stats-head">
         <h2>Статистика</h2>
+        {kindT && (
+          <button type="button" className="rc-kind-chip" onClick={() => setKind('')} title="Снять фильтр по типу">
+            <i style={{ background: kindT.color }} aria-hidden="true" />{kindT.label}<Icon name="close" size={14} />
+          </button>
+        )}
         <label className="select-pill" style={{ marginLeft: 'auto' }}>
           <span>Клиент</span>
           <select value={chatId} onChange={(e) => setChatId(Number(e.target.value))}>
@@ -90,13 +110,13 @@ export default function Receipts({ toast, chats, openChat }) {
         <section className="panel rc-chart">
           <div className="row" style={{ justifyContent: 'space-between' }}>
             <h2>По месяцам</h2>
-            <span className="hint">{client ? client.title : 'все клиенты'}, только оплаченные · 12 мес.</span>
+            <span className="hint">{filterNote || 'все клиенты'}, только оплаченные · 12 мес.</span>
           </div>
           <div className="bars" role="img" aria-label="Оплаты по месяцам">
             {rep.months.map((m, i) => (
               <div key={i} className="bar-col" title={`${m.label}: ${money(m.sum, cur)}`}>
                 <span className="bar-val">{m.sum ? short(m.sum) : ''}</span>
-                <div className={'bar' + (i === rep.months.length - 1 ? ' now' : '')} style={{ height: `${Math.max(m.sum ? 4 : 2, (m.sum / max) * 100)}%` }} />
+                <div className={'bar' + (i === rep.months.length - 1 ? ' now' : '')} style={{ height: `${Math.max(m.sum ? 4 : 2, (m.sum / max) * 100)}%`, ...(kindT && m.sum ? { background: kindT.color } : {}) }} />
                 <span className="bar-lbl">{m.label}</span>
               </div>
             ))}
@@ -121,9 +141,9 @@ export default function Receipts({ toast, chats, openChat }) {
       <section className="panel" style={{ padding: 0, gap: 0, overflow: 'hidden' }} aria-label="История чеков">
         <div className="row rc-table-head">
           <h2>История</h2>
-          <span className="hint">{chatId ? 'фильтр: ' + (client?.title || '') : 'все чеки за период, новые сверху'}</span>
+          <span className="hint">{filterNote ? 'фильтр: ' + filterNote : 'новые сверху; один чек — несколько частей'}</span>
           <span className="hint" style={{ marginLeft: 'auto', fontSize: 12 }}>
-            {rep.rows.length > 7 ? `${rep.rows.length} записей · видно 7, остальные — прокруткой` : `${rep.rows.length} записей`}
+            {rep.rows.length} {plural(rep.rows.length, 'чек', 'чека', 'чеков')}{rep.rows.length > 7 ? ' · дальше прокрутка' : ''}
           </span>
         </div>
         {rep.rows.length === 0 ? (
@@ -134,7 +154,7 @@ export default function Receipts({ toast, chats, openChat }) {
           <div className="rc-scroll">
             <table className="rc-table">
               <thead>
-                <tr><th>Дата</th><th>Клиент</th><th>За что</th><th>Статус</th><th className="num">Сумма</th><th className="act"><span className="sr">Действия</span></th></tr>
+                <tr><th>Дата</th><th>Клиент</th><th>Из чего состоит</th><th>Статус</th><th className="num">Итого</th><th className="act"><span className="sr">Действия</span></th></tr>
               </thead>
               <tbody>
                 {rep.rows.map((r) => (
@@ -144,7 +164,18 @@ export default function Receipts({ toast, chats, openChat }) {
                       <button type="button" className="link-btn" onClick={() => openChat(r.chatId)}>{r.chatTitle}</button>
                       <span className={'ch-mini ' + r.channel}>{r.channel === 'wa' ? 'WA' : 'TG'}</span>
                     </td>
-                    <td className="muted">{r.what || r.fileName || '—'}</td>
+                    <td>
+                      <div className="rc-parts">
+                        {r.parts.map((p, i) => {
+                          const t = typeOf(types, p.kind)
+                          return (
+                            <span key={i} className={'rc-part' + (kind && p.kind !== kind ? ' dim' : '')} title={p.what || t.label}>
+                              <i style={{ background: t.color }} aria-hidden="true" />{t.short} <b className="mono">{money(p.amount, '').trim()}</b>
+                            </span>
+                          )
+                        })}
+                      </div>
+                    </td>
                     <td><span className={'rc-st st-' + r.status}>{STATUS[r.status]}</span></td>
                     <td className="num mono nowrap">{money(r.amount, r.currency)}</td>
                     <td className="act nowrap">
@@ -159,31 +190,54 @@ export default function Receipts({ toast, chats, openChat }) {
         )}
       </section>
 
-      {edit && <EditReceipt r={edit} toast={toast} close={() => setEdit(null)} />}
+      <section className="panel" aria-label="Суммы по типам">
+        <div className="row" style={{ gap: 12 }}>
+          <h2>По типам</h2>
+          <span className="hint">{client ? client.title : 'все клиенты'}, оплаченные за период · нажмите на тип, чтобы отфильтровать страницу</span>
+        </div>
+        <div className="type-bar" role="img" aria-label="Доли типов в оплатах">
+          {rep.types.filter((t) => t.sum > 0).map((t) => (
+            <span key={t.id} style={{ width: `${(t.sum / (typesPaid || 1)) * 100}%`, background: t.color, opacity: !kind || kind === t.id ? 1 : 0.25 }} />
+          ))}
+        </div>
+        <div className="type-cards">
+          {rep.types.map((t) => (
+            <button key={t.id} type="button" className="type-card" aria-pressed={kind === t.id} onClick={() => setKind(kind === t.id ? '' : t.id)}>
+              <span className="type-card-head"><i style={{ background: t.color }} aria-hidden="true" />{t.label}<span className="mono">{typesPaid ? Math.round((t.sum / typesPaid) * 100) : 0}%</span></span>
+              <span className="type-card-sum mono">{money(t.sum, cur)}</span>
+              <span className="hint" style={{ fontSize: 12 }}>{t.count} {plural(t.count, 'часть', 'части', 'частей')}{t.inProject ? ' · в счёт проекта' : ' · сверх проекта'}</span>
+            </button>
+          ))}
+        </div>
+      </section>
+
+      {edit && <EditReceipt r={edit} types={types} toast={toast} addType={addType} close={() => setEdit(null)} />}
     </div>
   )
 }
 
-// Блок «Новый чек»: клиент из воронки, сумма, за что, дата, статус.
-function NewReceipt({ chats, cur, toast }) {
+// Блок «Новый чек»: клиент и его проект слева, части чека справа.
+function NewReceipt({ chats, types, cur, toast, addType }) {
   const [chatId, setChatId] = useState(0)
-  const [amount, setAmount] = useState('')
-  const [what, setWhat] = useState('')
+  const [lines, setLines] = useState([emptyLine()])
   const [date, setDate] = useState(isoDay())
   const [status, setStatus] = useState('paid')
   const [busy, setBusy] = useState(false)
   const [done, setDone] = useState('')
 
-  const ok = !!chatId && (Number(digits(amount)) > 0 || status === 'wait')
+  const inProj = (l) => typeOf(types, l.kind).inProject
+  const total = lines.reduce((a, l) => a + num(l.amount), 0)
+  const projNow = lines.filter(inProj).reduce((a, l) => a + num(l.amount), 0)
+  const ok = !!chatId && (total > 0 || status === 'wait')
 
   async function create(e) {
     e.preventDefault()
     if (!ok) return
     setBusy(true)
     try {
-      const r = await api.createReceipt({ chatId, amount: Number(digits(amount) || 0), what, date, status })
+      const r = await api.createReceipt({ chatId, date, status, parts: toParts(lines) })
       setDone(`Чек создан: ${r.chatTitle} · ${money(r.amount, r.currency)}`)
-      setChatId(0); setAmount(''); setWhat(''); setStatus('paid')
+      setLines([emptyLine()]); setStatus('paid')
     } catch (err) { toast(errText(err), 'err') } finally { setBusy(false) }
   }
 
@@ -194,35 +248,182 @@ function NewReceipt({ chats, cur, toast }) {
         <h2>Новый чек</h2>
         {done && <span className="rc-done" role="status">{done}</span>}
       </div>
-      <div className="rc-form">
-        <div className="field rc-f-client">
-          <span>Клиент из воронки</span>
-          <ClientPicker chats={chats} value={chatId} onChange={(id) => { setChatId(id); setDone('') }} />
+      <div className="rc-new-body">
+        <div className="rc-new-left">
+          <div className="field">
+            <span>Клиент из воронки</span>
+            <ClientPicker chats={chats} value={chatId} onChange={(id) => { setChatId(id); setDone('') }} />
+          </div>
+          {chatId ? <ProjectCard chatId={chatId} cur={cur} projNow={status === 'paid' ? projNow : 0} extraNow={status === 'paid' ? total - projNow : 0} toast={toast} /> : (
+            <p className="hint" style={{ fontSize: 13 }}>Выберите клиента — здесь появится его проект: стоимость, сколько оплачено и сколько осталось.</p>
+          )}
         </div>
-        <label className="field rc-f-amount">
-          <span>Сумма, {cur}</span>
-          <input className="input mono" inputMode="numeric" placeholder="25 000" value={spaced(amount)} onChange={(e) => setAmount(digits(e.target.value))} />
-        </label>
-        <label className="field rc-f-what">
-          <span>За что</span>
-          <input className="input" placeholder="Бот записи · этап 2" value={what} onChange={(e) => setWhat(e.target.value)} />
-        </label>
-        <label className="field rc-f-date">
-          <span>Дата оплаты</span>
-          <input className="input" type="date" value={date} onChange={(e) => setDate(e.target.value)} />
-        </label>
-        <label className="field rc-f-status">
-          <span>Статус</span>
-          <select className="input" value={status} onChange={(e) => setStatus(e.target.value)}>
-            <option value="paid">Оплачен</option>
-            <option value="wait">Ожидает</option>
-            <option value="refund">Возврат</option>
-          </select>
-        </label>
-        <button type="submit" className="btn btn-primary rc-create" disabled={!ok || busy}>{busy ? 'Создаём…' : 'Создать чек'}</button>
+        <div className="rc-new-right">
+          <div className="row" style={{ alignItems: 'baseline' }}>
+            <span className="hint" style={{ fontSize: 12 }}>Из чего состоит чек</span>
+            <span className="hint" style={{ fontSize: 12, marginLeft: 'auto' }}>часть «В счёт проекта» уменьшает остаток по проекту</span>
+          </div>
+          <PartsEditor lines={lines} setLines={(l) => { setLines(l); setDone('') }} types={types} cur={cur} addType={addType} />
+          <div className="row" style={{ gap: 12 }}>
+            <label className="row hint" style={{ gap: 8, fontSize: 13 }}>Дата
+              <input className="input input-sm" type="date" value={date} onChange={(e) => setDate(e.target.value)} />
+            </label>
+            <label className="row hint" style={{ gap: 8, fontSize: 13 }}>Статус
+              <select className="input input-sm" value={status} onChange={(e) => setStatus(e.target.value)}>
+                <option value="paid">Оплачен</option>
+                <option value="wait">Ожидает</option>
+                <option value="refund">Возврат</option>
+              </select>
+            </label>
+          </div>
+          <div className="rc-total">
+            <span className="hint" style={{ fontSize: 13 }}>в счёт проекта {money(projNow, cur)} · сверх проекта {money(total - projNow, cur)}</span>
+            <span className="hint" style={{ marginLeft: 'auto', fontSize: 13 }}>Итого чек</span>
+            <span className="mono rc-total-sum">{money(total, cur)}</span>
+            <button type="submit" className="btn btn-primary" disabled={!ok || busy}>{busy ? 'Создаём…' : 'Создать чек'}</button>
+          </div>
+        </div>
       </div>
-      <p className="hint" style={{ fontSize: 12 }}>Если включено в настройках плагина: сумма чеков станет «Суммой сделки» клиента, первый оплаченный чек переведёт его в «Сделку».</p>
     </form>
+  )
+}
+
+// Строки чека: тип, комментарий, сумма. В выпадающем списке типов — «+ Свой тип…».
+function PartsEditor({ lines, setLines, types, cur, addType }) {
+  const [newFor, setNewFor] = useState(-1) // строка, где вводят свой тип
+  const [newLabel, setNewLabel] = useState('')
+  const set = (i, patch) => setLines(lines.map((l, j) => (j === i ? { ...l, ...patch } : l)))
+
+  async function saveType(i) {
+    const label = newLabel.trim()
+    if (!label) return setNewFor(-1)
+    if (await addType(label)) set(i, { kind: 'c:' + label })
+    setNewFor(-1); setNewLabel('')
+  }
+
+  return (
+    <div className="parts">
+      {lines.map((l, i) => {
+        const t = typeOf(types, l.kind)
+        return (
+          <div key={i} className="part-row">
+            {newFor === i ? (
+              <span className="part-type part-new">
+                <input className="input" autoFocus placeholder="Новый тип, например «Консультация»" value={newLabel}
+                  onChange={(e) => setNewLabel(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); saveType(i) } if (e.key === 'Escape') setNewFor(-1) }} />
+                <button type="button" className="btn btn-sm" onClick={() => saveType(i)}>Добавить</button>
+              </span>
+            ) : (
+              <label className="part-type">
+                <span className="sr">Тип части</span>
+                <select className="input" style={{ borderColor: t.color }} value={l.kind}
+                  onChange={(e) => (e.target.value === '__new' ? (setNewFor(i), setNewLabel('')) : set(i, { kind: e.target.value }))}>
+                  {types.map((o) => <option key={o.id} value={o.id}>{o.label}</option>)}
+                  <option value="__new">+ Свой тип…</option>
+                </select>
+              </label>
+            )}
+            <label className="part-what">
+              <span className="sr">Комментарий</span>
+              <input className="input" placeholder="Комментарий" value={l.what} onChange={(e) => set(i, { what: e.target.value })} />
+            </label>
+            <label className="part-amount">
+              <span className="sr">Сумма части, {cur}</span>
+              <input className="input mono" inputMode="numeric" placeholder="0" value={spaced(l.amount)} onChange={(e) => set(i, { amount: digits(e.target.value) })} />
+            </label>
+            <span className={'part-tag' + (t.inProject ? ' in' : '')}>{t.inProject ? 'входит в проект' : 'сверх проекта'}</span>
+            <button type="button" className="msg-act" aria-label="Убрать часть" title="Убрать часть" disabled={lines.length === 1}
+              onClick={() => setLines(lines.filter((_, j) => j !== i))}><Icon name="close" size={14} /></button>
+          </div>
+        )
+      })}
+      <button type="button" className="btn btn-sm btn-dashed" onClick={() => setLines([...lines, emptyLine(lines.some((l) => l.kind === PROJECT) ? 'edits' : PROJECT)])}>
+        <Icon name="plus" size={14} /> Добавить часть
+      </button>
+    </div>
+  )
+}
+
+// Проект клиента: стоимость, оплачено, этим чеком, осталось, сверх проекта.
+function ProjectCard({ chatId, cur, projNow, extraNow, toast }) {
+  const [p, setP] = useState(null)
+  const [edit, setEdit] = useState(false)
+
+  const load = useCallback(() => api.chekiProject(chatId).then(setP).catch((e) => toast(errText(e), 'err')), [chatId, toast])
+  useEffect(() => { setP(null); load() }, [load])
+  useEffect(() => on('receipts:changed', (id) => id === chatId && load()), [chatId, load])
+
+  if (!p) return <div className="proj-card"><span className="hint">Загрузка…</span></div>
+  const price = p.price || 0
+  const paidW = price ? Math.min(100, (p.paid / price) * 100) : 0
+  const nowW = price ? Math.min(100 - paidW, (projNow / price) * 100) : 0
+  const left = Math.max(0, price - p.paid - projNow)
+
+  return (
+    <div className="proj-card">
+      <div className="row" style={{ gap: 8 }}>
+        <span className="eyebrow">Проект клиента</span>
+        <button type="button" className="btn btn-sm btn-quiet" style={{ marginLeft: 'auto' }} onClick={() => setEdit(true)}>{price ? 'Изменить' : 'Задать проект'}</button>
+      </div>
+      {price ? (
+        <>
+          <div className="row" style={{ alignItems: 'baseline', flexWrap: 'nowrap' }}>
+            <span className="proj-name">{p.name || 'Проект'}</span>
+            <span className="mono proj-price">{money(price, cur)}</span>
+          </div>
+          <div className="proj-bar" role="img" aria-label={`Проект оплачен на ${Math.round(((p.paid + projNow) / price) * 100)}% с учётом этого чека`}>
+            <span className="paid" style={{ width: paidW + '%' }} />
+            <span className="now" style={{ left: paidW + '%', width: nowW + '%' }} />
+          </div>
+          <div className="proj-nums">
+            <span>Оплачено <b className="mono">{money(p.paid, cur)}</b></span>
+            {projNow > 0 && <span>этим чеком <b className="mono accent">+{money(projNow, cur)}</b></span>}
+            <span style={{ marginLeft: 'auto' }}>осталось <b className="mono">{money(left, cur)}</b></span>
+          </div>
+        </>
+      ) : (
+        <p className="hint" style={{ fontSize: 13 }}>Стоимость проекта не задана. Задайте её — и будет видно, сколько осталось оплатить.</p>
+      )}
+      <div className="hint" style={{ fontSize: 12 }}>
+        Сверх проекта у клиента: <span className="mono warn-text">{money(p.extra + extraNow, cur)}</span> — правки, поддержка и т.п. в стоимость проекта не входят
+      </div>
+      {edit && <ProjectDialog p={p} cur={cur} toast={toast} close={() => setEdit(false)} onSaved={setP} />}
+    </div>
+  )
+}
+
+function ProjectDialog({ p, cur, toast, close, onSaved }) {
+  const [name, setName] = useState(p.name || '')
+  const [price, setPrice] = useState(p.price ? String(p.price) : '')
+  const [busy, setBusy] = useState(false)
+  async function save(e) {
+    e.preventDefault()
+    setBusy(true)
+    try { onSaved(await api.setChekiProject(p.chatId, name, num(price))); toast('Проект сохранён'); close() } catch (err) { toast(errText(err), 'err') } finally { setBusy(false) }
+  }
+  return (
+    <div className="modal-back" onMouseDown={(e) => e.target === e.currentTarget && close()}>
+      <form className="modal modal-sm" role="dialog" aria-modal="true" aria-labelledby="pj-title" onSubmit={save}>
+        <div className="modal-head">
+          <h2 id="pj-title">Проект клиента</h2>
+          <button type="button" className="icon-btn" aria-label="Закрыть" onClick={close}><Icon name="close" /></button>
+        </div>
+        <label className="field">
+          <span>Название</span>
+          <input className="input" autoFocus placeholder="Бот записи + 1С" value={name} onChange={(e) => setName(e.target.value)} />
+        </label>
+        <label className="field">
+          <span>Полная стоимость, {cur}</span>
+          <input className="input mono" style={{ fontSize: 16, fontWeight: 600 }} inputMode="numeric" placeholder="67 000" value={spaced(price)} onChange={(e) => setPrice(digits(e.target.value))} />
+        </label>
+        <p className="hint" style={{ fontSize: 13 }}>В оплату проекта идут только части чеков с типом «В счёт проекта». Правки и другое — сверх проекта.</p>
+        <div className="row" style={{ justifyContent: 'flex-end' }}>
+          <button type="button" className="btn" onClick={close}>Отмена</button>
+          <button type="submit" className="btn btn-primary" disabled={busy}>{busy ? 'Сохраняем…' : 'Сохранить'}</button>
+        </div>
+      </form>
+    </div>
   )
 }
 
@@ -276,25 +477,25 @@ function ClientPicker({ chats, value, onChange }) {
   )
 }
 
-function EditReceipt({ r, toast, close }) {
-  const [amount, setAmount] = useState(String(r.amount || ''))
-  const [what, setWhat] = useState(r.what || '')
+function EditReceipt({ r, types, toast, addType, close }) {
+  const [lines, setLines] = useState(r.parts.length ? r.parts.map((p) => ({ kind: p.kind, what: p.what, amount: String(p.amount) })) : [emptyLine()])
   const [date, setDate] = useState(isoDay(r.paidAt))
   const [status, setStatus] = useState(r.status)
   const [busy, setBusy] = useState(false)
+  const total = lines.reduce((a, l) => a + num(l.amount), 0)
 
   async function save(e) {
     e.preventDefault()
     setBusy(true)
     try {
-      await api.updateReceipt(r.id, { chatId: r.chatId, amount: Number(digits(amount) || 0), what, date, status })
+      await api.updateReceipt(r.id, { chatId: r.chatId, date, status, parts: toParts(lines) })
       toast('Чек изменён'); close()
     } catch (err) { toast(errText(err), 'err') } finally { setBusy(false) }
   }
 
   return (
     <div className="modal-back" onMouseDown={(e) => e.target === e.currentTarget && close()}>
-      <form className="modal modal-sm" role="dialog" aria-modal="true" aria-labelledby="er-title" onSubmit={save}>
+      <form className="modal" style={{ width: 'min(720px, 100%)' }} role="dialog" aria-modal="true" aria-labelledby="er-title" onSubmit={save}>
         <div className="modal-head">
           <div>
             <h2 id="er-title">Изменить чек</h2>
@@ -302,27 +503,19 @@ function EditReceipt({ r, toast, close }) {
           </div>
           <button type="button" className="icon-btn" aria-label="Закрыть" onClick={close}><Icon name="close" /></button>
         </div>
-        <label className="field">
-          <span>Сумма, {r.currency}</span>
-          <input className="input mono" style={{ fontSize: 16, fontWeight: 600 }} inputMode="numeric" autoFocus value={spaced(amount)} onChange={(e) => setAmount(digits(e.target.value))} />
-        </label>
-        <label className="field">
-          <span>За что</span>
-          <input className="input" value={what} onChange={(e) => setWhat(e.target.value)} />
-        </label>
-        <div className="row" style={{ flexWrap: 'nowrap' }}>
-          <label className="field" style={{ flex: 1 }}>
-            <span>Дата оплаты</span>
-            <input className="input" type="date" value={date} onChange={(e) => setDate(e.target.value)} />
+        <PartsEditor lines={lines} setLines={setLines} types={types} cur={r.currency} addType={addType} />
+        <div className="row" style={{ gap: 12 }}>
+          <label className="row hint" style={{ gap: 8, fontSize: 13 }}>Дата
+            <input className="input input-sm" type="date" value={date} onChange={(e) => setDate(e.target.value)} />
           </label>
-          <label className="field" style={{ flex: 1 }}>
-            <span>Статус</span>
-            <select className="input" value={status} onChange={(e) => setStatus(e.target.value)}>
+          <label className="row hint" style={{ gap: 8, fontSize: 13 }}>Статус
+            <select className="input input-sm" value={status} onChange={(e) => setStatus(e.target.value)}>
               <option value="paid">Оплачен</option>
               <option value="wait">Ожидает</option>
               <option value="refund">Возврат</option>
             </select>
           </label>
+          <span className="mono rc-total-sum" style={{ marginLeft: 'auto' }}>{money(total, r.currency)}</span>
         </div>
         <div className="row" style={{ justifyContent: 'flex-end' }}>
           <button type="button" className="btn" onClick={close}>Отмена</button>

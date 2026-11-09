@@ -141,6 +141,25 @@ CREATE TABLE IF NOT EXISTS receipts(
 );
 CREATE INDEX IF NOT EXISTS idx_receipts_paid ON receipts(paid_at);
 CREATE INDEX IF NOT EXISTS idx_receipts_chat ON receipts(chat_id);
+
+-- части чека: «В счёт проекта» 5 000 + «Правки» 2 200 = чек 7 200
+CREATE TABLE IF NOT EXISTS receipt_parts(
+  id         INTEGER PRIMARY KEY,
+  receipt_id INTEGER NOT NULL,
+  kind       TEXT    NOT NULL DEFAULT 'project',
+  what       TEXT    NOT NULL DEFAULT '',
+  amount     INTEGER NOT NULL DEFAULT 0,
+  pos        INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_receipt_parts ON receipt_parts(receipt_id);
+
+-- проект клиента и его полная стоимость (плагин «Чеки»)
+CREATE TABLE IF NOT EXISTS receipt_projects(
+  chat_id    INTEGER PRIMARY KEY,
+  name       TEXT    NOT NULL DEFAULT '',
+  price      INTEGER NOT NULL DEFAULT 0,
+  updated_at INTEGER NOT NULL DEFAULT 0
+);
 `
 
 var Stages = []string{"new", "sent", "replied", "deal", "lost"}
@@ -262,7 +281,10 @@ func (s *Store) migrate() error {
 			}
 		}
 	}
-	return s.migrateReceipts()
+	if err := s.migrateReceipts(); err != nil {
+		return err
+	}
+	return s.migrateReceiptParts()
 }
 
 // migrateReceipts: в 0.2.0 чек был привязан к сообщению (UNIQUE(chat_id, msg_id)).

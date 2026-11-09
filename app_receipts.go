@@ -17,6 +17,8 @@ import (
 
 // ---------- плагин «Чеки» ----------
 //
+// Чек — один платёж клиента, разбитый на части: «В счёт проекта» уменьшает остаток
+// по проекту клиента, остальные части (правки, поддержка…) — сверх проекта.
 // Работает только внутри CRM: ничего не отправляет клиентам и не меняет переписку.
 
 var errChekiOff = errors.New("плагин «Чеки» выключен — включите его в «Настройки → Плагины»")
@@ -26,6 +28,7 @@ type chekiSettings struct {
 	Currency    string // символ: ₽, сом, ₸, $
 	SumToDeal   bool
 	FirstToDeal bool
+	CustomTypes []string // свои типы частей, добавленные на странице «Чеки»
 }
 
 func (a *App) cheki() chekiSettings {
@@ -42,10 +45,19 @@ func (a *App) cheki() chekiSettings {
 		}
 		return def
 	}
+	var custom []string
+	if list, ok := s["customTypes"].([]any); ok {
+		for _, v := range list {
+			if t, ok := v.(string); ok && strings.TrimSpace(t) != "" {
+				custom = append(custom, strings.TrimSpace(t))
+			}
+		}
+	}
 	return chekiSettings{
 		Currency:    currencySymbol(str("currency", "₽ рубль")),
 		SumToDeal:   flag("sumToDeal", true),
 		FirstToDeal: flag("firstToDeal", true),
+		CustomTypes: custom,
 	}
 }
 
@@ -61,13 +73,144 @@ func currencySymbol(label string) string {
 	return "₽"
 }
 
-// ReceiptReq — форма «Новый чек» на странице плагина.
+// ---------- типы частей ----------
+
+// ReceiptType — тип части чека.
+type ReceiptType struct {
+	ID        string `json:"id"`
+	Label     string `json:"label"`
+	Short     string `json:"short"`
+	Color     string `json:"color"`
+	InProject bool   `json:"inProject"` // идёт в оплату проекта клиента
+}
+
+var baseTypes = []ReceiptType{
+	{ID: store.PartProject, Label: "В счёт проекта", Short: "Проект", Color: "#C8F25A", InProject: true},
+	{ID: "edits", Label: "Правки", Short: "Правки", Color: "#F5B65C"},
+	{ID: "site", Label: "Доп. работы по сайту", Short: "Сайт", Color: "#8CCDF5"},
+	{ID: "support", Label: "Поддержка", Short: "Поддержка", Color: "#B39DFF"},
+}
+
+var customColors = []string{"#F59BB0", "#7FE0AE", "#E8A0F0", "#9DB4FF", "#F0C987", "#7CD6D0"}
+
+// ReceiptTypes — типы частей: встроенные и свои.
+func (a *App) ReceiptTypes() []ReceiptType {
+	out := append([]ReceiptType{}, baseTypes...)
+	for i, t := range a.cheki().CustomTypes {
+		out = append(out, ReceiptType{ID: "c:" + t, Label: t, Short: t, Color: customColors[i%len(customColors)]})
+	}
+	return out
+}
+
+func (a *App) typeMap() map[string]ReceiptType {
+	m := map[string]ReceiptType{}
+	for _, t := range a.ReceiptTypes() {
+		m[t.ID] = t
+	}
+	return m
+}
+
+// typeOf — тип по id; удалённый свой тип показывается по названию из id.
+func typeOf(m map[string]ReceiptType, id string) ReceiptType {
+	if t, ok := m[id]; ok {
+		return t
+	}
+	label := strings.TrimPrefix(id, "c:")
+	return ReceiptType{ID: id, Label: label, Short: label, Color: "#8A8F98"}
+}
+
+// AddReceiptType — свой тип части (например «Консультация»). Идёт сверх проекта.
+func (a *App) AddReceiptType(label string) ([]ReceiptType, error) {
+	label = strings.TrimSpace(label)
+	if label == "" {
+		return a.ReceiptTypes(), errors.New("введите название типа")
+	}
+	if len([]rune(label)) > 40 {
+		return a.ReceiptTypes(), errors.New("название типа — не длиннее 40 символов")
+	}
+	for _, t := range a.ReceiptTypes() {
+		if strings.EqualFold(t.Label, label) || strings.EqualFold(t.Short, label) {
+			return a.ReceiptTypes(), nil // уже есть
+		}
+	}
+	settings := a.PluginSettings(chekiID)
+	list := []any{}
+	for _, t := range a.cheki().CustomTypes {
+		list = append(list, t)
+	}
+	settings["customTypes"] = append(list, label)
+	if err := a.SavePluginSettings(chekiID, settings); err != nil {
+		return a.ReceiptTypes(), err
+	}
+	return a.ReceiptTypes(), nil
+}
+
+// ---------- проект клиента ----------
+
+// ProjectView — проект клиента: стоимость, сколько оплачено частями «В счёт проекта»
+// и сколько клиент заплатил сверх проекта.
+type ProjectView struct {
+	store.Project
+	Paid  int64 `json:"paid"`
+	Left  int64 `json:"left"`
+	Extra int64 `json:"extra"`
+}
+
+func (a *App) ChekiProject(chatID int64) (ProjectView, error) {
+	if !a.pluginActive(chekiID) {
+		return ProjectView{}, errChekiOff
+	}
+	p, err := a.st.Project(a.ctx, chatID)
+	if err != nil {
+		return ProjectView{}, err
+	}
+	v := ProjectView{Project: p}
+	list, err := a.st.Receipts(a.ctx, chatID, 0)
+	if err != nil {
+		return v, err
+	}
+	for _, r := range list {
+		if r.Status != "paid" {
+			continue
+		}
+		for _, part := range r.Parts {
+			if part.Kind == store.PartProject {
+				v.Paid += part.Amount
+			} else {
+				v.Extra += part.Amount
+			}
+		}
+	}
+	if p.Price > v.Paid {
+		v.Left = p.Price - v.Paid
+	}
+	return v, nil
+}
+
+// SetChekiProject — название и полная стоимость проекта клиента.
+func (a *App) SetChekiProject(chatID int64, name string, price int64) (ProjectView, error) {
+	if !a.pluginActive(chekiID) {
+		return ProjectView{}, errChekiOff
+	}
+	if _, err := a.st.Chat(a.ctx, chatID); err != nil {
+		return ProjectView{}, errors.New("клиент не найден")
+	}
+	if err := a.st.SetProject(a.ctx, store.Project{ChatID: chatID, Name: name, Price: price}); err != nil {
+		return ProjectView{}, err
+	}
+	_ = a.st.AddEvent(a.ctx, chatID, "receipt", fmt.Sprintf("Проект: %s · %s", strings.TrimSpace(name), fmtMoney(price, a.cheki().Currency)))
+	a.emit("receipts:changed", chatID)
+	return a.ChekiProject(chatID)
+}
+
+// ---------- чеки ----------
+
+// ReceiptReq — форма «Новый чек» / «Изменить чек».
 type ReceiptReq struct {
-	ChatID int64  `json:"chatId"`
-	Amount int64  `json:"amount"`
-	Date   string `json:"date"`   // 2026-11-07; пусто — сегодня
-	Status string `json:"status"` // paid | wait | refund
-	What   string `json:"what"`
+	ChatID int64               `json:"chatId"`
+	Date   string              `json:"date"`   // 2026-11-09; пусто — сегодня
+	Status string              `json:"status"` // paid | wait | refund
+	Parts  []store.ReceiptPart `json:"parts"`
 }
 
 func (r ReceiptReq) paidAt() (int64, error) {
@@ -82,13 +225,17 @@ func (r ReceiptReq) paidAt() (int64, error) {
 }
 
 func (r ReceiptReq) check() error {
-	if r.Amount <= 0 && r.Status != "wait" {
-		return errors.New("укажите сумму чека")
+	var sum int64
+	for _, p := range r.Parts {
+		sum += p.Amount
+	}
+	if sum <= 0 && r.Status != "wait" {
+		return errors.New("укажите сумму хотя бы в одной части чека")
 	}
 	return nil
 }
 
-// CreateReceipt — новый чек: клиент из воронки, сумма, за что, дата, статус.
+// CreateReceipt — новый чек: клиент из воронки, части, дата, статус.
 func (a *App) CreateReceipt(req ReceiptReq) (store.Receipt, error) {
 	if !a.pluginActive(chekiID) {
 		return store.Receipt{}, errChekiOff
@@ -105,12 +252,12 @@ func (a *App) CreateReceipt(req ReceiptReq) (store.Receipt, error) {
 	}
 	cfg := a.cheki()
 	r, err := a.st.CreateReceipt(a.ctx, store.Receipt{
-		ChatID: req.ChatID, Amount: req.Amount, Currency: cfg.Currency, Status: req.Status, What: req.What, PaidAt: paidAt,
+		ChatID: req.ChatID, Currency: cfg.Currency, Status: req.Status, PaidAt: paidAt, Parts: req.Parts,
 	})
 	if err != nil {
 		return r, err
 	}
-	_ = a.st.AddEvent(a.ctx, r.ChatID, "receipt", receiptEvent("Чек", r))
+	_ = a.st.AddEvent(a.ctx, r.ChatID, "receipt", a.receiptEvent("Чек", r))
 	a.afterReceipts(r.ChatID, cfg, r.Status == "paid")
 	return r, nil
 }
@@ -131,13 +278,11 @@ func (a *App) UpdateReceipt(id int64, req ReceiptReq) (store.Receipt, error) {
 	if err != nil {
 		return old, err
 	}
-	r, err := a.st.UpdateReceipt(a.ctx, store.Receipt{
-		ID: id, Amount: req.Amount, Currency: old.Currency, Status: req.Status, What: req.What, PaidAt: paidAt,
-	})
+	r, err := a.st.UpdateReceipt(a.ctx, store.Receipt{ID: id, Status: req.Status, PaidAt: paidAt, Parts: req.Parts, Currency: old.Currency})
 	if err != nil {
 		return r, err
 	}
-	_ = a.st.AddEvent(a.ctx, r.ChatID, "receipt", receiptEvent("Чек изменён", r))
+	_ = a.st.AddEvent(a.ctx, r.ChatID, "receipt", a.receiptEvent("Чек изменён", r))
 	a.afterReceipts(r.ChatID, a.cheki(), r.Status == "paid" && old.Status != "paid")
 	return r, nil
 }
@@ -159,9 +304,17 @@ func (a *App) DeleteReceipt(id int64) error {
 	return nil
 }
 
-func receiptEvent(verb string, r store.Receipt) string {
+// receiptEvent — запись в историю клиента: «Чек · 7 200 ₽ · оплачен · Проект 5 000 + Правки 2 200».
+func (a *App) receiptEvent(verb string, r store.Receipt) string {
 	s := fmt.Sprintf("%s · %s · %s", verb, fmtMoney(r.Amount, r.Currency), store.ReceiptStatusName(r.Status))
-	if r.What != "" {
+	if len(r.Parts) > 1 {
+		tm := a.typeMap()
+		var ps []string
+		for _, p := range r.Parts {
+			ps = append(ps, typeOf(tm, p.Kind).Short+" "+fmtMoney(p.Amount, ""))
+		}
+		s += " · " + strings.Join(ps, " + ")
+	} else if r.What != "" {
 		s += " · " + r.What
 	}
 	return s
@@ -190,6 +343,7 @@ func (a *App) afterReceipts(chatID int64, cfg chekiSettings, paidNow bool) {
 	a.emit("chats:changed", nil)
 }
 
+// fmtMoney: 7200, "₽" → «7 200 ₽»; cur "" — без валюты.
 func fmtMoney(n int64, cur string) string {
 	s := fmt.Sprintf("%d", n)
 	var b strings.Builder
@@ -200,7 +354,7 @@ func fmtMoney(n int64, cur string) string {
 		b.WriteRune(r)
 	}
 	if cur == "" {
-		cur = "₽"
+		return b.String()
 	}
 	return b.String() + " " + cur
 }
@@ -210,6 +364,7 @@ func fmtMoney(n int64, cur string) string {
 type ReceiptsQuery struct {
 	ChatID int64  `json:"chatId"` // 0 — все клиенты из воронки
 	Period string `json:"period"` // quarter | year | all
+	Kind   string `json:"kind"`   // тип части; пусто — все
 }
 
 type MonthSum struct {
@@ -224,6 +379,13 @@ type ClientSum struct {
 	Sum     int64  `json:"sum"`
 }
 
+// TypeSum — блок «По типам»: оплачено частями этого типа.
+type TypeSum struct {
+	ReceiptType
+	Sum   int64 `json:"sum"`
+	Count int   `json:"count"`
+}
+
 type ReceiptsReport struct {
 	Rows     []store.Receipt `json:"rows"`
 	Total    int64           `json:"total"` // оплачено
@@ -233,6 +395,8 @@ type ReceiptsReport struct {
 	Months   []MonthSum      `json:"months"` // последние 12 месяцев, только оплаченные
 	Top      []ClientSum     `json:"top"`    // топ клиентов за период
 	Clients  []ClientSum     `json:"clients"`
+	Types    []TypeSum       `json:"types"`
+	AllTypes []ReceiptType   `json:"allTypes"`
 	Currency string          `json:"currency"`
 	Year     int             `json:"year"`
 }
@@ -249,6 +413,22 @@ func periodStart(p string, now time.Time) int64 {
 	return time.Date(now.Year(), 1, 1, 0, 0, 0, 0, time.Local).Unix()
 }
 
+// sumOf — сумма чека с учётом фильтра по типу части.
+func sumOf(r store.Receipt, kind string) (int64, bool) {
+	if kind == "" {
+		return r.Amount, true
+	}
+	var s int64
+	found := false
+	for _, p := range r.Parts {
+		if p.Kind == kind {
+			s += p.Amount
+			found = true
+		}
+	}
+	return s, found
+}
+
 // Receipts — данные страницы «Чеки».
 func (a *App) Receipts(q ReceiptsQuery) (ReceiptsReport, error) {
 	if !a.pluginActive(chekiID) {
@@ -259,8 +439,10 @@ func (a *App) Receipts(q ReceiptsQuery) (ReceiptsReport, error) {
 	if err != nil {
 		return ReceiptsReport{}, err
 	}
+	types := a.ReceiptTypes()
+	tm := a.typeMap()
 	rep := ReceiptsReport{Rows: []store.Receipt{}, Months: []MonthSum{}, Top: []ClientSum{}, Clients: []ClientSum{},
-		Currency: a.cheki().Currency, Year: now.Year()}
+		Types: []TypeSum{}, AllTypes: types, Currency: a.cheki().Currency, Year: now.Year()}
 	from := periodStart(q.Period, now)
 
 	// 12 месяцев, заканчивая текущим
@@ -274,27 +456,50 @@ func (a *App) Receipts(q ReceiptsQuery) (ReceiptsReport, error) {
 
 	clients := map[int64]*ClientSum{}
 	top := map[int64]*ClientSum{}
+	byType := map[string]*TypeSum{}
+	var typeOrder []string
+	for _, t := range types {
+		byType[t.ID] = &TypeSum{ReceiptType: t}
+		typeOrder = append(typeOrder, t.ID)
+	}
 	paid := 0
 	for _, r := range all {
 		if clients[r.ChatID] == nil {
 			clients[r.ChatID] = &ClientSum{ChatID: r.ChatID, Title: r.ChatTitle, Channel: r.Channel}
 		}
+		inPeriod := r.PaidAt >= from
+		sum, has := sumOf(r, q.Kind)
 		if r.Status == "paid" {
 			clients[r.ChatID].Sum += r.Amount
-		}
-		inPeriod := r.PaidAt >= from
-		if inPeriod && r.Status == "paid" {
-			if top[r.ChatID] == nil {
-				top[r.ChatID] = &ClientSum{ChatID: r.ChatID, Title: r.ChatTitle, Channel: r.Channel}
+			if inPeriod && has {
+				if top[r.ChatID] == nil {
+					top[r.ChatID] = &ClientSum{ChatID: r.ChatID, Title: r.ChatTitle, Channel: r.Channel}
+				}
+				top[r.ChatID].Sum += sum
 			}
-			top[r.ChatID].Sum += r.Amount
 		}
 		if q.ChatID != 0 && r.ChatID != q.ChatID {
 			continue
 		}
+		// «По типам» — по клиенту из фильтра и периоду, без фильтра по типу
+		if inPeriod && r.Status == "paid" {
+			for _, p := range r.Parts {
+				t := byType[p.Kind]
+				if t == nil {
+					t = &TypeSum{ReceiptType: typeOf(tm, p.Kind)}
+					byType[p.Kind] = t
+					typeOrder = append(typeOrder, p.Kind)
+				}
+				t.Sum += p.Amount
+				t.Count++
+			}
+		}
+		if !has {
+			continue
+		}
 		if r.Status == "paid" {
 			if i, ok := idx[time.Unix(r.PaidAt, 0).Format("2006-01")]; ok {
-				rep.Months[i].Sum += r.Amount
+				rep.Months[i].Sum += sum
 			}
 		}
 		if !inPeriod {
@@ -303,10 +508,10 @@ func (a *App) Receipts(q ReceiptsQuery) (ReceiptsReport, error) {
 		rep.Rows = append(rep.Rows, r)
 		switch r.Status {
 		case "paid":
-			rep.Total += r.Amount
+			rep.Total += sum
 			paid++
 		case "wait":
-			rep.Wait += r.Amount
+			rep.Wait += sum
 		}
 	}
 	rep.Count = len(rep.Rows)
@@ -324,6 +529,11 @@ func (a *App) Receipts(q ReceiptsQuery) (ReceiptsReport, error) {
 		rep.Clients = append(rep.Clients, *c)
 	}
 	sort.Slice(rep.Clients, func(i, j int) bool { return rep.Clients[i].Title < rep.Clients[j].Title })
+	for _, id := range typeOrder {
+		if t := byType[id]; t.Sum > 0 || !strings.HasPrefix(id, "c:") {
+			rep.Types = append(rep.Types, *t)
+		}
+	}
 	return rep, nil
 }
 
@@ -355,7 +565,7 @@ func (a *App) ChekiSummary() (ChekiSummary, error) {
 	return out, nil
 }
 
-// ExportReceipts — выгрузка чеков в Excel. Пустой Path — отмена.
+// ExportReceipts — выгрузка чеков в Excel: лист «Чеки» и лист «Части». Пустой Path — отмена.
 func (a *App) ExportReceipts(q ReceiptsQuery) (ExportResult, error) {
 	rep, err := a.Receipts(q)
 	if err != nil {
@@ -374,5 +584,7 @@ func (a *App) ExportReceipts(q ReceiptsQuery) (ExportResult, error) {
 	if filepath.Ext(path) == "" {
 		path += ".xlsx"
 	}
-	return ExportResult{Path: path, Count: len(rep.Rows)}, dataio.ExportReceiptsXLSX(rep.Rows, path)
+	tm := a.typeMap()
+	label := func(kind string) (string, bool) { t := typeOf(tm, kind); return t.Label, t.InProject }
+	return ExportResult{Path: path, Count: len(rep.Rows)}, dataio.ExportReceiptsXLSX(rep.Rows, label, path)
 }

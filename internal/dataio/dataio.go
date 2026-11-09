@@ -483,8 +483,10 @@ func PreviewSQLite(path string) (Preview, error) {
 
 // ---------- плагин «Чеки» ----------
 
-// ExportReceiptsXLSX — лист «Чеки»: дата, клиент, за что, файл, статус, сумма.
-func ExportReceiptsXLSX(rows []store.Receipt, path string) error {
+// ExportReceiptsXLSX — лист «Чеки» (один чек — одна строка) и лист «Части»
+// (каждая часть отдельно: тип, входит ли в проект, сумма).
+// label возвращает название типа части и признак «в счёт проекта».
+func ExportReceiptsXLSX(rows []store.Receipt, label func(kind string) (string, bool), path string) error {
 	f := excelize.NewFile()
 	defer f.Close()
 	const sh = "Чеки"
@@ -498,15 +500,30 @@ func ExportReceiptsXLSX(rows []store.Receipt, path string) error {
 	bold, _ := f.NewStyle(&excelize.Style{Font: &excelize.Font{Bold: true}})
 	_ = sw.SetColWidth(1, 1, 12)
 	_ = sw.SetColWidth(2, 2, 30)
-	_ = sw.SetColWidth(4, 5, 32)
-	if err := sw.SetRow("A1", cells([]string{"Дата", "Клиент", "Канал", "За что", "Файл", "Статус", "Сумма", "Валюта"}, bold)); err != nil {
+	_ = sw.SetColWidth(4, 4, 48)
+	if err := sw.SetRow("A1", cells([]string{"Дата", "Клиент", "Канал", "Из чего состоит", "Статус", "В счёт проекта", "Сверх проекта", "Итого", "Валюта"}, bold)); err != nil {
 		return err
 	}
 	for i, r := range rows {
+		var inProj, extra int64
+		var parts []string
+		for _, p := range r.Parts {
+			name, proj := label(p.Kind)
+			if proj {
+				inProj += p.Amount
+			} else {
+				extra += p.Amount
+			}
+			s := fmt.Sprintf("%s %d", name, p.Amount)
+			if p.What != "" {
+				s += " (" + p.What + ")"
+			}
+			parts = append(parts, s)
+		}
 		cell, _ := excelize.CoordinatesToCellName(1, i+2)
 		if err := sw.SetRow(cell, []any{
-			time.Unix(r.PaidAt, 0).Format("02.01.2006"), r.ChatTitle, channelTitle(r.Channel), r.What, r.FileName,
-			store.ReceiptStatusName(r.Status), r.Amount, r.Currency,
+			time.Unix(r.PaidAt, 0).Format("02.01.2006"), r.ChatTitle, channelTitle(r.Channel), strings.Join(parts, "; "),
+			store.ReceiptStatusName(r.Status), inProj, extra, r.Amount, r.Currency,
 		}); err != nil {
 			return err
 		}
@@ -515,6 +532,43 @@ func ExportReceiptsXLSX(rows []store.Receipt, path string) error {
 		return err
 	}
 	_ = f.SetPanes(sh, &excelize.Panes{Freeze: true, YSplit: 1, TopLeftCell: "A2", ActivePane: "bottomLeft"})
+
+	const ps = "Части"
+	if _, err := f.NewSheet(ps); err != nil {
+		return err
+	}
+	pw, err := f.NewStreamWriter(ps)
+	if err != nil {
+		return err
+	}
+	_ = pw.SetColWidth(2, 2, 30)
+	_ = pw.SetColWidth(3, 3, 24)
+	_ = pw.SetColWidth(5, 5, 40)
+	if err := pw.SetRow("A1", cells([]string{"Дата", "Клиент", "Тип", "В счёт проекта", "Комментарий", "Статус", "Сумма", "Валюта"}, bold)); err != nil {
+		return err
+	}
+	n := 2
+	for _, r := range rows {
+		for _, p := range r.Parts {
+			name, proj := label(p.Kind)
+			yes := "нет"
+			if proj {
+				yes = "да"
+			}
+			cell, _ := excelize.CoordinatesToCellName(1, n)
+			n++
+			if err := pw.SetRow(cell, []any{
+				time.Unix(r.PaidAt, 0).Format("02.01.2006"), r.ChatTitle, name, yes, p.What,
+				store.ReceiptStatusName(r.Status), p.Amount, r.Currency,
+			}); err != nil {
+				return err
+			}
+		}
+	}
+	if err := pw.Flush(); err != nil {
+		return err
+	}
+	f.SetActiveSheet(0)
 	tmp := strings.TrimSuffix(path, filepath.Ext(path)) + ".tmp.xlsx"
 	if err := f.SaveAs(tmp); err != nil {
 		return err

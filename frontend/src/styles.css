@@ -580,3 +580,48 @@ body.dragging-card, body.dragging-card * { cursor: grabbing !important; user-sel
   .page { padding-left: 16px; padding-right: 16px; }
   .page-head { flex-wrap: wrap; }
 }
+
+/* ---------- «Чеки»: чек из частей и проект клиента ---------- */
+.rc-new-body { display: flex; flex-wrap: wrap; gap: 18px; align-items: stretch; }
+.rc-new-left { flex: 1 1 300px; min-width: 0; display: flex; flex-direction: column; gap: 12px; }
+.rc-new-right { flex: 2 1 460px; min-width: 0; display: flex; flex-direction: column; gap: 12px; }
+.proj-card { padding: 14px 16px; border-radius: 16px; background: var(--field); border: 1px solid var(--line-soft); display: flex; flex-direction: column; gap: 10px; }
+.proj-name { font-size: 15px; font-weight: 600; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.proj-price { margin-left: auto; font-size: 18px; font-weight: 600; white-space: nowrap; }
+.proj-bar { position: relative; height: 10px; border-radius: 6px; background: var(--line-3); overflow: hidden; }
+.proj-bar span { position: absolute; top: 0; bottom: 0; }
+.proj-bar .paid { left: 0; background: var(--accent); }
+.proj-bar .now { background: repeating-linear-gradient(45deg, var(--accent) 0 4px, color-mix(in srgb, var(--accent) 55%, transparent) 4px 8px); }
+.proj-nums { display: flex; flex-wrap: wrap; gap: 6px 14px; font-size: 13px; color: var(--muted); }
+.proj-nums b { color: var(--text); font-weight: 600; }
+.proj-nums b.accent, .accent { color: var(--accent-text); }
+.warn-text { color: var(--warn-text); }
+.parts { display: flex; flex-direction: column; gap: 8px; }
+.part-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; padding: 8px; border-radius: 14px; background: var(--field); border: 1px solid var(--line-soft); }
+.part-type { flex: 1 1 170px; min-width: 0; }
+.part-new { display: flex; gap: 6px; align-items: center; }
+.part-new .input { flex: 1; min-width: 0; }
+.part-what { flex: 2 1 180px; min-width: 0; }
+.part-amount { flex: 1 1 110px; min-width: 0; }
+.part-amount input { text-align: right; font-weight: 600; }
+.part-row .input { width: 100%; box-sizing: border-box; }
+.part-tag { flex: 0 0 auto; padding: 4px 9px; border-radius: 999px; font-size: 11px; white-space: nowrap; background: var(--warn-bg); color: var(--warn-text); }
+.part-tag.in { background: var(--ok-bg); color: var(--accent-text); }
+.part-row .msg-act:disabled { opacity: .35; cursor: default; }
+.btn-dashed { align-self: flex-start; border-style: dashed; }
+.rc-total { display: flex; flex-wrap: wrap; align-items: center; gap: 14px; padding-top: 14px; border-top: 1px solid var(--line-soft); }
+.rc-total-sum { font-size: 26px; font-weight: 600; white-space: nowrap; }
+.rc-kind-chip { display: inline-flex; align-items: center; gap: 8px; height: 34px; padding: 0 12px; border-radius: 999px; border: 1px solid var(--ok-line); background: var(--ok-bg); color: var(--text); font-size: 13px; }
+.rc-kind-chip i, .rc-part i, .type-card-head i { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+.rc-parts { display: flex; flex-wrap: wrap; gap: 6px; padding: 6px 0; }
+.rc-part { display: inline-flex; align-items: center; gap: 6px; padding: 4px 9px; border-radius: 999px; font-size: 12px; background: var(--raise); color: var(--text); white-space: nowrap; }
+.rc-part b { font-weight: 600; }
+.rc-part.dim { opacity: .4; }
+.rc-table td { height: auto; min-height: 42px; padding-top: 4px; padding-bottom: 4px; }
+.type-bar { display: flex; gap: 2px; height: 14px; border-radius: 8px; overflow: hidden; background: var(--raise); }
+.type-cards { display: flex; flex-wrap: wrap; gap: 10px; }
+.type-card { flex: 1 1 190px; display: flex; flex-direction: column; gap: 6px; padding: 14px 16px; border-radius: 16px; border: 1px solid var(--line-soft); background: var(--field); color: var(--text); text-align: left; }
+.type-card[aria-pressed="true"] { border-color: var(--ok-line); background: var(--ok-bg); }
+.type-card-head { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--muted); }
+.type-card-head .mono { margin-left: auto; font-size: 12px; }
+.type-card-sum { font-size: 20px; font-weight: 600; }

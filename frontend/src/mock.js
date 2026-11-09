@@ -86,17 +86,29 @@ function pluginsView() {
 // ---- чеки (демо) ----
 const day = 86400
 const ago = (d) => now - d * day
+const TYPES = [
+  { id: 'project', label: 'В счёт проекта', short: 'Проект', color: '#C8F25A', inProject: true },
+  { id: 'edits', label: 'Правки', short: 'Правки', color: '#F5B65C', inProject: false },
+  { id: 'site', label: 'Доп. работы по сайту', short: 'Сайт', color: '#8CCDF5', inProject: false },
+  { id: 'support', label: 'Поддержка', short: 'Поддержка', color: '#B39DFF', inProject: false },
+]
+const customTypes = []
+const allTypes = () => [...TYPES, ...customTypes.map((t, i) => ({ id: 'c:' + t, label: t, short: t, color: ['#F59BB0', '#7FE0AE', '#E8A0F0'][i % 3], inProject: false }))]
+const projects = { [fp.id]: { name: 'Бот записи + 1С', price: 67000 }, [ml.id]: { name: 'Бот записи', price: 80000 }, 4: { name: 'Бот пробного урока', price: 45000 } }
 let receipts = [
-  [ml.id, 'Клиника «Мед-Лайн»', 'Бот записи · этап 2', 'Платёжное поручение №418.pdf', 'paid', 25000, 3],
-  [fp.id, 'Фитнес-клуб Pulse', 'Бот записи + 1С', 'чек_sber.pdf', 'paid', 60000, 11],
-  [3, 'Автосервис «Гараж 24»', 'Предоплата', 'счёт-оплата.pdf', 'wait', 17500, 30],
-  [4, 'Школа английского Lingvo', 'Бот пробного урока', 'payment.pdf', 'paid', 45000, 44],
-  [ml.id, 'Клиника «Мед-Лайн»', 'Предоплата 50%', 'pp_312.pdf', 'paid', 40000, 50],
-  [fp.id, 'Фитнес-клуб Pulse', 'Аудит и ТЗ', 'чек_0822.pdf', 'paid', 15000, 72],
-  [4, 'Школа английского Lingvo', 'Доработки', 'payment_07.pdf', 'refund', 8000, 95],
-  [6, 'Кофейня «Зерно»', 'Лендинг', 'pp_0611.pdf', 'paid', 32000, 140],
-  [ml.id, 'Клиника «Мед-Лайн»', 'Консультация', 'check.pdf', 'paid', 12000, 200],
-].map(([chatId, chatTitle, what, fileName, status, amount, d], i) => ({ id: i + 1, chatId, msgId: i === 0 ? 600 : 9000 + i, chatTitle, channel: 'tg', what, fileName, status, amount, currency: '₽', paidAt: ago(d), createdAt: ago(d) }))
+  [ml.id, 'Клиника «Мед-Лайн»', 'paid', 3, [['project', 'Этап 2', 25000]]],
+  [fp.id, 'Фитнес-клуб Pulse', 'paid', 11, [['project', 'Предоплата 50%', 33500], ['edits', 'Правки расписания', 2500]]],
+  [3, 'Автосервис «Гараж 24»', 'wait', 30, [['project', 'Предоплата', 17500]]],
+  [4, 'Школа английского Lingvo', 'paid', 44, [['project', 'Весь проект', 45000]]],
+  [ml.id, 'Клиника «Мед-Лайн»', 'paid', 50, [['project', 'Этап 1', 40000], ['edits', '3 правки', 9000]]],
+  [fp.id, 'Фитнес-клуб Pulse', 'paid', 72, [['site', 'Страница с ценами', 7000]]],
+  [6, 'Кофейня «Зерно»', 'paid', 140, [['site', 'Лендинг', 32000]]],
+  [ml.id, 'Клиника «Мед-Лайн»', 'paid', 200, [['support', 'Поддержка', 12000]]],
+].map(([chatId, chatTitle, status, d, parts], i) => {
+  const ps = parts.map(([kind, what, amount]) => ({ kind, what, amount }))
+  return { id: i + 1, chatId, msgId: 0, chatTitle, channel: 'tg', what: ps.map((p) => p.what).join('; '), fileName: '', status, amount: ps.reduce((a, p) => a + p.amount, 0), currency: '₽', paidAt: ago(d), createdAt: ago(d), parts: ps }
+})
+const cleanParts = (parts) => (parts || []).map((p) => ({ kind: p.kind || 'project', what: (p.what || '').trim(), amount: p.amount || 0 })).filter((p) => p.amount || p.what)
 const MONTHS = ['янв', 'фев', 'мар', 'апр', 'май', 'июн', 'июл', 'авг', 'сен', 'окт', 'ноя', 'дек']
 function afterReceipts(chatId, paid) {
   const c = find(chatId)
@@ -106,27 +118,34 @@ function afterReceipts(chatId, paid) {
   }
   emit('receipts:changed', chatId); emit('chats:changed')
 }
-function demoReport(chatId, period) {
+function demoReport(chatId, period, kind) {
   const d = new Date()
   const from = period === 'all' ? 0 : period === 'quarter' ? new Date(d.getFullYear(), d.getMonth() - 2, 1).getTime() / 1000 : new Date(d.getFullYear(), 0, 1).getTime() / 1000
   const months = Array.from({ length: 12 }, (_, i) => { const m = new Date(d.getFullYear(), d.getMonth() - 11 + i, 1); return { label: MONTHS[m.getMonth()], sum: 0, key: m.getFullYear() * 12 + m.getMonth() } })
+  const sumOf = (r) => (kind ? r.parts.filter((p) => p.kind === kind).reduce((a, p) => a + p.amount, 0) : r.amount)
+  const has = (r) => !kind || r.parts.some((p) => p.kind === kind)
   const sorted = [...receipts].sort((a, b) => b.paidAt - a.paidAt)
-  const rows = sorted.filter((r) => r.paidAt >= from && (!chatId || r.chatId === chatId))
-  sorted.filter((r) => r.status === 'paid' && (!chatId || r.chatId === chatId)).forEach((r) => { const t = new Date(r.paidAt * 1000); const m = months.find((x) => x.key === t.getFullYear() * 12 + t.getMonth()); if (m) m.sum += r.amount })
+  const mine = sorted.filter((r) => !chatId || r.chatId === chatId)
+  const rows = mine.filter((r) => r.paidAt >= from && has(r))
+  mine.filter((r) => r.status === 'paid' && has(r)).forEach((r) => { const t = new Date(r.paidAt * 1000); const m = months.find((x) => x.key === t.getFullYear() * 12 + t.getMonth()); if (m) m.sum += sumOf(r) })
   const paid = rows.filter((r) => r.status === 'paid')
-  const total = paid.reduce((a, r) => a + r.amount, 0)
-  const by = {}; sorted.filter((r) => r.paidAt >= from && r.status === 'paid').forEach((r) => { (by[r.chatId] ||= { chatId: r.chatId, title: r.chatTitle, channel: r.channel, sum: 0 }).sum += r.amount })
+  const total = paid.reduce((a, r) => a + sumOf(r), 0)
+  const by = {}; sorted.filter((r) => r.paidAt >= from && r.status === 'paid' && has(r)).forEach((r) => { (by[r.chatId] ||= { chatId: r.chatId, title: r.chatTitle, channel: r.channel, sum: 0 }).sum += sumOf(r) })
   const cl = {}; sorted.forEach((r) => { cl[r.chatId] ||= { chatId: r.chatId, title: r.chatTitle, channel: r.channel, sum: 0 } })
-  return { rows, total, wait: rows.filter((r) => r.status === 'wait').reduce((a, r) => a + r.amount, 0), avg: paid.length ? Math.round(total / paid.length) : 0, count: rows.length, months, top: Object.values(by).sort((a, b) => b.sum - a.sum).slice(0, 5), clients: Object.values(cl).sort((a, b) => a.title.localeCompare(b.title)), currency: '₽', year: d.getFullYear() }
+  const types = allTypes().map((t) => ({ ...t, sum: 0, count: 0 }))
+  mine.filter((r) => r.paidAt >= from && r.status === 'paid').forEach((r) => r.parts.forEach((p) => { const t = types.find((x) => x.id === p.kind); if (t) { t.sum += p.amount; t.count++ } }))
+  return { rows, total, wait: rows.filter((r) => r.status === 'wait').reduce((a, r) => a + sumOf(r), 0), avg: paid.length ? Math.round(total / paid.length) : 0, count: rows.length, months, top: Object.values(by).sort((a, b) => b.sum - a.sum).slice(0, 5), clients: Object.values(cl).sort((a, b) => a.title.localeCompare(b.title)), types: types.filter((t) => t.sum > 0 || !t.id.startsWith('c:')), allTypes: allTypes(), currency: '₽', year: d.getFullYear() }
 }
+
 const wait = (ms = 250) => new Promise((r) => setTimeout(r, ms))
 let bc = { running: false, total: 0, done: 0, failed: 0, current: '', nextAt: 0, lastError: '' }
 let sentToday = 3
 let settings = { tgApiId: 0, hasApiHash: false, tgFolderId: 0, tgFolderName: '', historyLimit: 200, autoSync: true, dailyLimit: 20, template: '{name}, здравствуйте! Это Тимур, SINAPS. Делаю ботов и ИИ-автоматизацию для бизнеса: запись клиентов, ответы 24/7, заявки сразу в таблицу. Если есть что автоматизировать — подскажу бесплатно. Актуально?' }
 const setStatus = (s) => { status = s; emit('tg:status', s) }
 
+
 export const mock = {
-  GetInfo: async () => ({ version: '0.3.0-demo', dataDir: '~/.config/SINAPS-CRM' }),
+  GetInfo: async () => ({ version: '0.4.0-demo', dataDir: '~/.config/SINAPS-CRM' }),
   OpenDataDir: async () => {},
   GetSettings: async () => ({ ...settings }),
   SaveSettings: async (p) => { Object.assign(settings, Object.fromEntries(Object.entries(p).filter(([, v]) => v != null))) },
@@ -144,18 +163,30 @@ export const mock = {
   CreateReceipt: async (r) => {
     await wait(200)
     const c = find(r.chatId); if (!c) throw new Error('выберите клиента')
-    if (!(r.amount > 0) && r.status !== 'wait') throw new Error('укажите сумму чека')
+    const parts = cleanParts(r.parts); const amount = parts.reduce((a, p) => a + p.amount, 0)
+    if (!parts.length) throw new Error('добавьте хотя бы одну часть чека')
+    if (!(amount > 0) && r.status !== 'wait') throw new Error('укажите сумму хотя бы в одной части чека')
     const paidAt = r.date ? Math.floor(new Date(r.date + 'T12:00:00').getTime() / 1000) : now
-    const rec = { id: Math.max(0, ...receipts.map((x) => x.id)) + 1, chatId: r.chatId, msgId: 0, chatTitle: c.title, channel: c.channel, fileName: '', amount: r.amount, currency: '₽', status: r.status || 'paid', what: (r.what || '').trim(), paidAt, createdAt: now }
+    const rec = { id: Math.max(0, ...receipts.map((x) => x.id)) + 1, chatId: r.chatId, msgId: 0, chatTitle: c.title, channel: c.channel, fileName: '', amount, currency: '₽', status: r.status || 'paid', what: parts.map((p) => p.what).filter(Boolean).join('; '), paidAt, createdAt: now, parts }
     receipts.push(rec); afterReceipts(r.chatId, rec.status === 'paid'); return rec
   },
   UpdateReceipt: async (id, r) => {
     const rec = receipts.find((x) => x.id === id); if (!rec) throw new Error('чек не найден')
-    Object.assign(rec, { amount: r.amount, status: r.status, what: (r.what || '').trim(), paidAt: r.date ? Math.floor(new Date(r.date + 'T12:00:00').getTime() / 1000) : rec.paidAt })
+    const parts = cleanParts(r.parts); if (!parts.length) throw new Error('добавьте хотя бы одну часть чека')
+    Object.assign(rec, { parts, amount: parts.reduce((a, p) => a + p.amount, 0), status: r.status, what: parts.map((p) => p.what).filter(Boolean).join('; '), paidAt: r.date ? Math.floor(new Date(r.date + 'T12:00:00').getTime() / 1000) : rec.paidAt })
     afterReceipts(rec.chatId, rec.status === 'paid'); return rec
   },
   DeleteReceipt: async (id) => { const rec = receipts.find((x) => x.id === id); receipts = receipts.filter((x) => x.id !== id); if (rec) afterReceipts(rec.chatId, false) },
-  Receipts: async ({ chatId, period }) => demoReport(chatId, period),
+  ReceiptTypes: async () => allTypes(),
+  AddReceiptType: async (label) => { label = (label || '').trim(); if (!label) throw new Error('введите название типа'); if (!allTypes().some((t) => t.label.toLowerCase() === label.toLowerCase())) customTypes.push(label); return allTypes() },
+  ChekiProject: async (chatId) => {
+    const p = projects[chatId] || { name: '', price: 0 }
+    let paid = 0, extra = 0
+    receipts.filter((r) => r.chatId === chatId && r.status === 'paid').forEach((r) => r.parts.forEach((x) => { if (x.kind === 'project') paid += x.amount; else extra += x.amount }))
+    return { chatId, name: p.name, price: p.price, paid, extra, left: Math.max(0, p.price - paid) }
+  },
+  SetChekiProject: async (chatId, name, price) => { projects[chatId] = { name: name.trim(), price }; emit('receipts:changed', chatId); return mock.ChekiProject(chatId) },
+  Receipts: async ({ chatId, period, kind }) => demoReport(chatId, period, kind),
   ChekiSummary: async () => ({ count: receipts.length, sumYear: receipts.filter((r) => r.status === 'paid').reduce((a, r) => a + r.amount, 0), clients: new Set(receipts.map((r) => r.chatId)).size, year: new Date().getFullYear(), currency: '₽' }),
   ExportReceipts: async () => { await wait(400); return { path: '/home/timur/sinaps-cheki.xlsx', count: receipts.length } },
   RemoveMessage: async (chatId, msgId) => {
