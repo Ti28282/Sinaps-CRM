@@ -26,7 +26,7 @@ import (
 	"sinaps-crm/internal/whatsapp"
 )
 
-const version = "0.4.0"
+const version = "0.5.0"
 
 // App — всё, что видит фронт: каждый экспортируемый метод доступен как
 // window.go.main.App.<Method>() и возвращает Promise.
@@ -46,6 +46,8 @@ type App struct {
 
 	pmu     sync.RWMutex
 	plugins []plugins.Entry // последнее чтение папки плагинов
+
+	ntf notifyState // плагин «Уведомления на телефон»
 }
 
 func NewApp() *App { return &App{} }
@@ -96,6 +98,10 @@ func (a *App) startup(ctx context.Context) {
 }
 
 func (a *App) shutdown(ctx context.Context) {
+	a.ntf.quitting.Store(true)
+	if a.ntf.hub != nil {
+		a.ntf.hub.Stop()
+	}
 	a.StopBroadcast()
 	if a.tg != nil {
 		a.tg.Stop()
@@ -113,6 +119,7 @@ func (a *App) emit(event string, data any) {
 		return
 	}
 	runtime.EventsEmit(a.ctx, event, data)
+	a.notifyHook(event, data)
 	// после входа один раз тихо докачиваем выбранную папку
 	if s, ok := data.(telegram.Status); ok && event == "tg:status" && s.State == telegram.StateReady {
 		a.autoOnce.Do(func() { go a.autoSync() })

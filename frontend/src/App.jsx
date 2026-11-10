@@ -7,6 +7,7 @@ import Broadcast from './pages/Broadcast.jsx'
 import Connect from './pages/Connect.jsx'
 import Settings from './pages/Settings.jsx'
 import Receipts from './pages/Receipts.jsx'
+import Notify from './pages/Notify.jsx'
 
 const NAV = [
   { id: 'pipeline', label: 'Воронка', icon: 'board' },
@@ -19,6 +20,7 @@ const NAV = [
 // страницы плагинов: пункт меню появляется, только когда плагин включён и работает
 const PLUGIN_NAV = [
   { id: 'cheki', plugin: 'cheki', label: 'Чеки', icon: 'receipt' },
+  { id: 'notify', plugin: 'notify', label: 'Уведомления', icon: 'bell' },
 ]
 
 export default function App() {
@@ -66,6 +68,16 @@ export default function App() {
     ]
     return () => offs.forEach((off) => off && off())
   }, [reload, reloadSettings, toast])
+
+  // плагин «Уведомления»: CRM знает, смотрит ли пользователь сейчас в окно
+  useEffect(() => {
+    const tell = () => api.setWindowActive(document.hasFocus() && !document.hidden).catch(() => {})
+    tell()
+    window.addEventListener('focus', tell)
+    window.addEventListener('blur', tell)
+    document.addEventListener('visibilitychange', tell)
+    return () => { window.removeEventListener('focus', tell); window.removeEventListener('blur', tell); document.removeEventListener('visibilitychange', tell) }
+  }, [])
 
   // когда ещё ничего не подключено — сразу на экран подключения
   useEffect(() => {
@@ -148,6 +160,7 @@ export default function App() {
         {page === 'broadcast' && <Broadcast chats={chats} settings={settings} reloadSettings={reloadSettings} tg={tg} toast={toast} />}
         {page === 'settings' && <Settings settings={settings} reloadSettings={reloadSettings} toast={toast} plugins={plugins} setPlugins={setPlugins} openPage={go} />}
         {page === 'cheki' && pluginOn(plugins, 'cheki') && <Receipts toast={toast} chats={chats} openChat={(id) => go('chats', id)} />}
+        {page === 'notify' && pluginOn(plugins, 'notify') && <Notify toast={toast} plugins={plugins} />}
         {page === 'connect' && <Connect tg={tg} wa={wa} settings={settings} reloadSettings={reloadSettings} toast={toast} done={() => go('pipeline')} />}
       </main>
 

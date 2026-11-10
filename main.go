@@ -28,7 +28,14 @@ func main() {
 		BackgroundColour: &options.RGBA{R: 13, G: 14, B: 17, A: 255},
 		OnStartup:        app.startup,
 		OnShutdown:       app.shutdown,
-		Bind:             []interface{}{app},
+		// плагин «Уведомления»: пока привязан телефон, крестик прячет окно, CRM работает в фоне
+		OnBeforeClose: app.beforeClose,
+		// повторный запуск не открывает вторую CRM, а показывает спрятанное окно
+		SingleInstanceLock: &options.SingleInstanceLock{
+			UniqueId:               "sinaps-crm-2f6c1b7e-4a0d-4c59-9d3e-5b8a1f0c7e21",
+			OnSecondInstanceLaunch: func(options.SecondInstanceData) { app.showWindow() },
+		},
+		Bind: []interface{}{app},
 		// перетаскивание файлов в окно: Wails отдаёт настоящие пути к файлам.
 		// DisableWebViewDrop не включаем — он ломает любое перетаскивание в интерфейсе.
 		DragAndDrop: &options.DragAndDrop{EnableFileDrop: true},

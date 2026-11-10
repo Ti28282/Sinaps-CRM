@@ -1,0 +1,48 @@
+name: Android APK
+
+# Собирает приложение «SINAPS Уведомления» из папки android/ и выкладывает APK
+# в релиз apk-latest — оттуда его скачивает кнопка «Скачать приложение» в CRM.
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'android/**'
+      - '.github/workflows/android.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Build APK
+        working-directory: android
+        run: |
+          chmod +x gradlew
+          ./gradlew --no-daemon assembleDebug
+          cp app/build/outputs/apk/debug/app-debug.apk ../sinaps-notify.apk
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sinaps-notify-apk
+          path: sinaps-notify.apk
+
+      - name: Publish to release apk-latest
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release delete apk-latest --cleanup-tag --yes || true
+          gh release create apk-latest sinaps-notify.apk \
+            --target "$GITHUB_SHA" \
+            --title "SINAPS Уведомления — приложение для Android" \
+            --notes "Скачайте sinaps-notify.apk на телефон и установите. Привязка: в CRM «Плагины → Уведомления → Привязать телефон». Сборка №${GITHUB_RUN_NUMBER}." \
+            --latest=false

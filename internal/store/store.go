@@ -153,6 +153,27 @@ CREATE TABLE IF NOT EXISTS receipt_parts(
 );
 CREATE INDEX IF NOT EXISTS idx_receipt_parts ON receipt_parts(receipt_id);
 
+-- плагин «Уведомления на телефон»: привязанные телефоны, журнал событий
+-- (телефон забирает пропущенное после обрыва связи) и отметки «уже напоминали».
+CREATE TABLE IF NOT EXISTS notify_devices(
+  id        TEXT PRIMARY KEY,
+  name      TEXT    NOT NULL DEFAULT '',
+  key       BLOB    NOT NULL,
+  paired_at INTEGER NOT NULL,
+  last_seen INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS notify_events(
+  seq  INTEGER PRIMARY KEY AUTOINCREMENT,
+  at   INTEGER NOT NULL,
+  body TEXT    NOT NULL
+);
+CREATE TABLE IF NOT EXISTS notify_marks(
+  kind TEXT NOT NULL,
+  ref  TEXT NOT NULL,
+  at   INTEGER NOT NULL,
+  PRIMARY KEY(kind, ref)
+);
+
 -- проект клиента и его полная стоимость (плагин «Чеки»)
 CREATE TABLE IF NOT EXISTS receipt_projects(
   chat_id    INTEGER PRIMARY KEY,

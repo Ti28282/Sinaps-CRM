@@ -52,6 +52,7 @@ func (a *App) loadPlugins() PluginsView {
 	if a.ctx != nil {
 		runtime.EventsEmit(a.ctx, "plugins:changed", v)
 	}
+	a.syncNotify() // сервер уведомлений включается и выключается вместе с плагином
 	return v
 }
 
@@ -121,6 +122,9 @@ func (a *App) SavePluginSettings(id string, settings map[string]any) error {
 	})
 	if err == nil {
 		a.emit("plugin:settings", map[string]any{"id": id, "settings": a.PluginSettings(id)})
+		if id == notifyID {
+			a.syncNotify()
+		}
 	}
 	return err
 }

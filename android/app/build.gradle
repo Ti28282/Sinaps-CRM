@@ -1,0 +1,48 @@
+plugins {
+    id 'com.android.application'
+}
+
+android {
+    namespace 'app.sinaps.crm.notify'
+    compileSdk 34
+
+    defaultConfig {
+        applicationId 'app.sinaps.crm.notify'
+        minSdk 26
+        targetSdk 34
+        // номер сборки GitHub Actions: новая сборка ставится поверх старой
+        versionCode((System.getenv('GITHUB_RUN_NUMBER') ?: '1') as int)
+        versionName '0.1'
+    }
+
+    signingConfigs {
+        // один и тот же ключ в каждой сборке, иначе обновление не встанет поверх старой версии
+        debug {
+            storeFile rootProject.file('debug.keystore')
+            storePassword 'android'
+            keyAlias 'androiddebugkey'
+            keyPassword 'android'
+        }
+    }
+
+    buildTypes {
+        debug {
+            signingConfig signingConfigs.debug
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+
+    lint {
+        abortOnError false
+        checkReleaseBuilds false
+    }
+}
+
+dependencies {
+    // сканер QR-кода; больше зависимостей нет
+    implementation 'com.journeyapps:zxing-android-embedded:4.3.0'
+}

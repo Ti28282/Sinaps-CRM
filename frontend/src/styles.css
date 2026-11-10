@@ -625,3 +625,21 @@ body.dragging-card, body.dragging-card * { cursor: grabbing !important; user-sel
 .type-card-head { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--muted); }
 .type-card-head .mono { margin-left: auto; font-size: 12px; }
 .type-card-sum { font-size: 20px; font-weight: 600; }
+
+/* ---------- плагин «Уведомления на телефон» ---------- */
+.ntf-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; align-items: start; }
+.ntf-phone { grid-column: 1 / -1; gap: 16px; }
+.ntf-phone.linked { border-color: var(--ok-line); }
+.ntf-dev { display: flex; flex-wrap: wrap; align-items: center; gap: 14px; padding: 14px 16px; border-radius: 16px; background: var(--field); border: 1px solid var(--line-soft); }
+.ntf-pair { display: flex; flex-wrap: wrap; gap: 20px; align-items: flex-start; }
+.ntf-qr { width: 196px; height: 196px; padding: 10px; border-radius: 16px; background: #ECEDEF; flex-shrink: 0; }
+.ntf-qr img { width: 100%; height: 100%; display: block; }
+.ntf-steps { margin: 0; padding-left: 20px; display: flex; flex-direction: column; gap: 6px; font-size: 14px; }
+.ntf-list { gap: 8px; }
+.ntf-row { display: flex; align-items: center; gap: 14px; padding: 12px 0; border-top: 1px solid var(--line-soft); flex-wrap: wrap; }
+.ntf-row > span { flex: 1 1 200px; min-width: 0; }
+.ntf-row b { display: block; font-size: 14px; font-weight: 500; }
+.ntf-row small { display: block; font-size: 12px; color: var(--muted-2); margin-top: 3px; }
+.ntf-row.off b { color: var(--muted-2); }
+.ntf-bg { display: flex; flex-wrap: wrap; align-items: center; gap: 14px; padding: 14px 18px; border-radius: 18px; border: 1px dashed var(--line-3); }
+@media (max-width: 1000px) { .ntf-grid { grid-template-columns: minmax(0, 1fr); } }

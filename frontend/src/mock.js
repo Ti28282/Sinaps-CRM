@@ -63,10 +63,26 @@ const chekiFields = [
   { key: 'sumToDeal', label: 'Сумма чеков → «Сумма сделки» клиента', type: 'bool', default: true },
   { key: 'firstToDeal', label: 'Первый чек переводит клиента в «Сделка»', type: 'bool', default: true },
 ]
+const notifyFields = [
+  { key: 'evMsg', label: 'Клиент написал', type: 'bool', default: true },
+  { key: 'evFresh', label: 'Новый клиент', type: 'bool', default: true },
+  { key: 'evReply', label: 'Ответил на рассылку', type: 'bool', default: true },
+  { key: 'evSilent', label: 'Клиент молчит 3 дня', type: 'bool', default: false },
+  { key: 'evWait', label: 'Чек ждёт оплаты больше 5 дней', type: 'bool', default: false },
+  { key: 'evAlarm', label: 'CRM потеряла связь', type: 'bool', default: true },
+  { key: 'show', label: 'Что видно в уведомлении', type: 'select', options: ['Имя и текст сообщения', 'Только имя клиента', 'Только «новое сообщение»'], default: 'Имя и текст сообщения' },
+  { key: 'skipActive', label: 'Не присылать, пока я сам в CRM', type: 'bool', default: true },
+  { key: 'quiet', label: 'Тихие часы 23:00–08:00', type: 'bool', default: true },
+  { key: 'group', label: 'Несколько сообщений подряд — одним уведомлением', type: 'bool', default: true },
+]
+const notifyDemo = { devices: [{ id: 'd1', name: 'Samsung Galaxy A54', pairedAt: now - 86400, lastSeen: now - 60, online: true }], pairing: null }
+const notifyView = () => ({ running: true, port: 47815, addrs: ['192.168.1.42'], devices: [...notifyDemo.devices], pairing: notifyDemo.pairing,
+  pairUrl: notifyDemo.pairing ? 'sinaps://pair?h=192.168.1.42&p=47815&c=' + notifyDemo.pairing.code : '', apkUrl: '' })
 const chekiDefaults = Object.fromEntries(chekiFields.map((f) => [f.key, f.default]))
 const pluginSettings = {}
 const demoPlugins = [
   { file: 'cheki.sinaps', id: 'cheki', name: 'Чеки', version: '0.2', description: 'Чеки по клиентам из воронки: сумма, за что, статистика и история', icon: 'receipt', requires: [], fields: chekiFields, enabled: true, base: 'ok' },
+  { file: 'notify.sinaps', id: 'notify', name: 'Уведомления на телефон', version: '0.1', description: 'Своё приложение на Android: принимает сообщения клиентов в фоне и показывает их', icon: 'bell', requires: [], fields: notifyFields, enabled: true, base: 'ok' },
   { file: 'moy-nalog.sinaps', id: 'moy-nalog', name: '«Мой налог»', version: '0.1', description: 'Чек самозанятого по отмеченному чеку', icon: 'puzzle', requires: ['cheki'], fields: [], enabled: false, base: 'error', error: 'Эта версия CRM не умеет запускать плагин «moy-nalog»' },
   { file: 'old-reports.sinaps', id: 'reports', name: 'Отчёты', version: '0.3', description: '', icon: 'puzzle', requires: [], fields: [], enabled: false, base: 'error', error: 'Нужна CRM v1.4 или новее' },
   { file: 'photos.sinaps', id: '', name: '', version: '', description: '', icon: '', requires: [], fields: [], enabled: false, base: 'invalid', error: 'В архиве нет manifest.json' },
@@ -154,7 +170,15 @@ export const mock = {
   SetTheme: async (theme) => { appConfig.theme = theme === 'light' ? 'light' : 'dark'; try { localStorage.setItem('sinaps-theme', appConfig.theme) } catch {} ; return { ...appConfig } },
   Plugins: async () => pluginsView(),
   SetPluginEnabled: async (id, on) => { const p = demoPlugins.find((x) => x.id === id); if (p) p.enabled = on; const v = pluginsView(); emit('plugins:changed', v); emit('chats:changed'); return v },
-  PluginSettings: async (id) => ({ ...chekiDefaults, ...(pluginSettings[id] || {}) }),
+  PluginSettings: async (id) => ({ ...Object.fromEntries((demoPlugins.find((p) => p.id === id)?.fields || []).map((f) => [f.key, f.default])), ...(pluginSettings[id] || {}) }),
+  NotifyState: async () => notifyView(),
+  NotifyStartPairing: async () => { notifyDemo.pairing = { code: '48213975', expiresAt: Math.floor(Date.now() / 1000) + 300 }; return notifyView() },
+  NotifyCancelPairing: async () => { notifyDemo.pairing = null; return notifyView() },
+  NotifyUnpair: async (id) => { notifyDemo.devices = notifyDemo.devices.filter((d) => d.id !== id); return notifyView() },
+  NotifyTest: async () => { await wait(300) },
+  OpenApkPage: async () => {},
+  SetWindowActive: async () => {},
+  QuitApp: async () => {},
   SavePluginSettings: async (id, st) => { pluginSettings[id] = st },
   OpenPluginsDir: async () => {},
   ChoosePluginsDir: async () => pluginsView(),

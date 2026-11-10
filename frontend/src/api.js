@@ -43,6 +43,17 @@ export const api = {
   setChekiProject: (chatId, name, price) => call('SetChekiProject', chatId, name, price),
   chekiSummary: () => call('ChekiSummary'),
   exportReceipts: (chatId = 0, period = 'year', kind = '') => call('ExportReceipts', { chatId, period, kind }),
+
+  // плагин «Уведомления на телефон»
+  notifyState: () => call('NotifyState'),
+  notifyStartPairing: () => call('NotifyStartPairing'),
+  notifyCancelPairing: () => call('NotifyCancelPairing'),
+  notifyUnpair: (id) => call('NotifyUnpair', id),
+  notifyTest: () => call('NotifyTest'),
+  openApkPage: () => call('OpenApkPage'),
+  setWindowActive: (active) => call('SetWindowActive', active),
+  quitApp: () => call('QuitApp'),
+
   exportData: (format) => call('ExportData', format),
   pickImportFile: () => call('PickImportFile'),
   previewImport: (path) => call('PreviewImport', path),

@@ -217,7 +217,7 @@ function Plugins({ plugins, setPlugins, toast, openPage }) {
 function PluginRow({ p, busy, toggle, openSettings, reveal }) {
   const st = STATUS[p.status] || STATUS.invalid
   const bad = p.status === 'error' || p.status === 'invalid'
-  const icon = bad ? (p.status === 'error' ? 'warn' : 'box') : (p.icon === 'receipt' || p.icon === 'spark' ? p.icon : 'puzzle')
+  const icon = bad ? (p.status === 'error' ? 'warn' : 'box') : (['receipt', 'spark', 'bell'].includes(p.icon) ? p.icon : 'puzzle')
   const detail = p.error || p.description
   return (
     <div className={'plug-row ' + st.cls}>
@@ -275,7 +275,7 @@ function PluginPanel({ p, toast, close, openPage }) {
     <div className="drawer-back" onMouseDown={(e) => e.target === e.currentTarget && close()}>
       <aside className="drawer" role="dialog" aria-modal="true" aria-labelledby="plug-title">
         <div className="row" style={{ gap: 14, flexWrap: 'nowrap' }}>
-          <div className="plug-ico on" style={{ width: 48, height: 48 }}><Icon name={p.icon === 'receipt' ? 'receipt' : 'puzzle'} size={22} /></div>
+          <div className="plug-ico on" style={{ width: 48, height: 48 }}><Icon name={['receipt', 'bell'].includes(p.icon) ? p.icon : 'puzzle'} size={22} /></div>
           <div style={{ minWidth: 0 }}>
             <h2 id="plug-title" style={{ margin: 0, fontSize: 19 }}>{p.name} <span className="mono hint" style={{ fontSize: 12 }}>v{p.version}</span></h2>
             <div className="mono plug-file">{p.file}</div>
@@ -312,6 +312,11 @@ function PluginPanel({ p, toast, close, openPage }) {
           </div>
         )}
 
+        {p.id === 'notify' && (
+          <div className="row">
+            <button type="button" className="btn btn-primary" onClick={() => { close(); openPage('notify') }}>Открыть «Уведомления» <Icon name="arrow" size={16} /></button>
+          </div>
+        )}
         {isCheki && (
           <div className="row">
             <button type="button" className="btn btn-primary" onClick={() => { close(); openPage('cheki') }}>Открыть «Чеки» <Icon name="arrow" size={16} /></button>
