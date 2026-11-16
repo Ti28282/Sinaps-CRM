@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 )
@@ -39,6 +40,13 @@ type Receipt struct {
 	PaidAt    int64         `json:"paidAt"`
 	CreatedAt int64         `json:"createdAt"`
 	Parts     []ReceiptPart `json:"parts"`
+
+	// файл чека (PDF или фото). Копия лежит в папке данных CRM: receipts/<FilePath>.
+	// У чеков из 0.2 копии может не быть — тогда файл берётся из сообщения MsgID при первом просмотре.
+	FilePath string `json:"-"`
+	FileSize int64  `json:"fileSize"`
+	FileSrc  string `json:"fileSrc"` // pc | tg | wa
+	HasFile  bool   `json:"hasFile"`
 }
 
 // Project — проект клиента и его полная стоимость.
@@ -62,14 +70,104 @@ func ReceiptStatusName(s string) string {
 }
 
 const receiptCols = `r.id, r.chat_id, r.msg_id, COALESCE(c.title, r.chat_title), COALESCE(c.channel, r.channel),
-r.file_name, r.amount, r.currency, r.status, r.what, r.paid_at, r.created_at`
+r.file_name, r.amount, r.currency, r.status, r.what, r.paid_at, r.created_at, r.file_path, r.file_size, r.file_src`
 
 func scanReceipt(row interface{ Scan(...any) error }) (Receipt, error) {
 	var r Receipt
 	err := row.Scan(&r.ID, &r.ChatID, &r.MsgID, &r.ChatTitle, &r.Channel, &r.FileName,
-		&r.Amount, &r.Currency, &r.Status, &r.What, &r.PaidAt, &r.CreatedAt)
+		&r.Amount, &r.Currency, &r.Status, &r.What, &r.PaidAt, &r.CreatedAt, &r.FilePath, &r.FileSize, &r.FileSrc)
 	r.Parts = []ReceiptPart{}
+	r.HasFile = r.FilePath != "" || (r.MsgID != 0 && r.FileName != "")
 	return r, err
+}
+
+// migrateReceiptFiles: с 0.6.0 у чека есть свой файл (копия в папке данных).
+func (s *Store) migrateReceiptFiles() error {
+	cols := map[string]bool{}
+	rows, err := s.db.Query(`PRAGMA table_info(receipts)`)
+	if err != nil {
+		return err
+	}
+	for rows.Next() {
+		var cid, notnull, pk int
+		var name, typ string
+		var def sql.NullString
+		if err := rows.Scan(&cid, &name, &typ, &notnull, &def, &pk); err != nil {
+			rows.Close()
+			return err
+		}
+		cols[name] = true
+	}
+	rows.Close()
+	for _, c := range []struct{ name, ddl string }{
+		{"file_path", `ALTER TABLE receipts ADD COLUMN file_path TEXT NOT NULL DEFAULT ''`},
+		{"file_size", `ALTER TABLE receipts ADD COLUMN file_size INTEGER NOT NULL DEFAULT 0`},
+		{"file_src", `ALTER TABLE receipts ADD COLUMN file_src TEXT NOT NULL DEFAULT ''`},
+	} {
+		if !cols[c.name] {
+			if _, err := s.db.Exec(c.ddl); err != nil {
+				return fmt.Errorf("receipts.%s: %w", c.name, err)
+			}
+		}
+	}
+	return nil
+}
+
+// SetReceiptFile запоминает файл чека. name — как показывать, path — имя копии в папке receipts/,
+// msgID — сообщение в переписке, откуда взят файл (0 — с компьютера).
+func (s *Store) SetReceiptFile(ctx context.Context, id int64, name, path string, size int64, src string, msgID int64) error {
+	res, err := s.db.ExecContext(ctx, `UPDATE receipts SET file_name=?, file_path=?, file_size=?, file_src=?, msg_id=? WHERE id=?`,
+		name, path, size, src, msgID, id)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return errors.New("чек не найден")
+	}
+	return nil
+}
+
+// ClearReceiptFile убирает файл у чека (сам чек остаётся).
+func (s *Store) ClearReceiptFile(ctx context.Context, id int64) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE receipts SET file_name='', file_path='', file_size=0, file_src='', msg_id=0 WHERE id=?`, id)
+	return err
+}
+
+// ReceiptFilePaths — все копии файлов, на которые ссылаются чеки (для уборки папки).
+func (s *Store) ReceiptFilePaths(ctx context.Context) (map[string]bool, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT file_path FROM receipts WHERE file_path<>''`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]bool{}
+	for rows.Next() {
+		var p string
+		if err := rows.Scan(&p); err != nil {
+			return nil, err
+		}
+		out[p] = true
+	}
+	return out, rows.Err()
+}
+
+// MediaMessages — сообщения клиента с файлами и фото, новые сверху.
+func (s *Store) MediaMessages(ctx context.Context, chatID int64, limit int) ([]Message, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT `+msgCols+` FROM messages
+WHERE chat_id=? AND deleted=0 AND media_kind IN ('photo','file') ORDER BY date DESC, msg_id DESC LIMIT ?`, chatID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []Message{}
+	for rows.Next() {
+		m, err := scanMsg(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, m)
+	}
+	return out, rows.Err()
 }
 
 // migrateReceiptParts: чеки до 0.4.0 были без частей — каждый становится одной частью «В счёт проекта».

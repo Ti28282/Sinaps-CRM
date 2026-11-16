@@ -111,6 +111,7 @@ const TYPES = [
 const customTypes = []
 const allTypes = () => [...TYPES, ...customTypes.map((t, i) => ({ id: 'c:' + t, label: t, short: t, color: ['#F59BB0', '#7FE0AE', '#E8A0F0'][i % 3], inProject: false }))]
 const projects = { [fp.id]: { name: 'Бот записи + 1С', price: 67000 }, [ml.id]: { name: 'Бот записи', price: 80000 }, 4: { name: 'Бот пробного урока', price: 45000 } }
+const DEMO_FILES = [['Платёжное поручение №418.png', 186000, 'tg'], ['чек_sber_2110.png', 142000, 'pc'], null, null, ['pp_312.png', 98000, 'tg'], null, ['чек.png', 120000, 'pc']]
 let receipts = [
   [ml.id, 'Клиника «Мед-Лайн»', 'paid', 3, [['project', 'Этап 2', 25000]]],
   [fp.id, 'Фитнес-клуб Pulse', 'paid', 11, [['project', 'Предоплата 50%', 33500], ['edits', 'Правки расписания', 2500]]],
@@ -122,8 +123,24 @@ let receipts = [
   [ml.id, 'Клиника «Мед-Лайн»', 'paid', 200, [['support', 'Поддержка', 12000]]],
 ].map(([chatId, chatTitle, status, d, parts], i) => {
   const ps = parts.map(([kind, what, amount]) => ({ kind, what, amount }))
-  return { id: i + 1, chatId, msgId: 0, chatTitle, channel: 'tg', what: ps.map((p) => p.what).join('; '), fileName: '', status, amount: ps.reduce((a, p) => a + p.amount, 0), currency: '₽', paidAt: ago(d), createdAt: ago(d), parts: ps }
+  const f = DEMO_FILES[i]
+  return { id: i + 1, chatId, msgId: 0, chatTitle, channel: 'tg', what: ps.map((p) => p.what).join('; '), status, amount: ps.reduce((a, p) => a + p.amount, 0), currency: '₽', paidAt: ago(d), createdAt: ago(d), parts: ps,
+    fileName: f ? f[0] : '', fileSize: f ? f[1] : 0, fileSrc: f ? f[2] : '', hasFile: !!f }
 })
+// демо: картинка «чека из банка» для окна просмотра
+function receiptPicture(r) {
+  const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]))
+  const date = new Date(r.paidAt * 1000).toLocaleDateString('ru-RU')
+  const sum = (r.amount || 0).toLocaleString('ru-RU') + ' ' + r.currency
+  const row = (y, k, v) => `<text x="40" y="${y}" fill="#6B7079" font-size="22">${k}</text><text x="560" y="${y}" fill="#1A1B1E" font-size="22" text-anchor="end">${esc(v)}</text>`
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="600" height="820" font-family="Arial, sans-serif"><rect width="600" height="820" fill="#FAFAF7"/>
+<rect x="40" y="40" width="64" height="64" rx="16" fill="#21A038"/><text x="124" y="84" font-size="30" font-weight="700" fill="#1A1B1E">Банк</text>
+<text x="40" y="170" font-size="26" fill="#6B7079">Чек по операции</text><text x="40" y="236" font-size="52" font-weight="700" fill="#1A1B1E">${esc(sum)}</text>
+<line x1="40" y1="280" x2="560" y2="280" stroke="#E2E2DC" stroke-width="2"/>
+${row(330, 'Дата', date + ' 14:02')}${row(380, 'Операция', 'Перевод')}${row(430, 'Отправитель', r.chatTitle)}${row(480, 'Получатель', 'Тимур С.')}${row(530, 'Комиссия', '0 ' + r.currency)}
+<rect x="40" y="600" width="250" height="56" rx="28" fill="#E6F6E9"/><text x="165" y="636" font-size="22" fill="#21A038" text-anchor="middle">✓ Исполнено</text></svg>`
+  return 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg)
+}
 const cleanParts = (parts) => (parts || []).map((p) => ({ kind: p.kind || 'project', what: (p.what || '').trim(), amount: p.amount || 0 })).filter((p) => p.amount || p.what)
 const MONTHS = ['янв', 'фев', 'мар', 'апр', 'май', 'июн', 'июл', 'авг', 'сен', 'окт', 'ноя', 'дек']
 function afterReceipts(chatId, paid) {
@@ -161,6 +178,23 @@ const setStatus = (s) => { status = s; emit('tg:status', s) }
 
 
 export const mock = {
+  receiptFileUrl: (r) => receiptPicture(r),
+  PickReceiptFile: async () => ({ path: '/home/timur/Загрузки/Чек_Сбер_' + new Date().toLocaleDateString('ru-RU') + '.png', name: 'Чек_Сбер_' + new Date().toLocaleDateString('ru-RU') + '.png', size: 182000, isImage: true }),
+  ReceiptChatFiles: async (chatId) => { await wait(250); return chatId % 2 ? [
+    { msgId: 901, name: 'Фото ' + new Date((now - 3600) * 1000).toLocaleDateString('ru-RU') + '.jpg', size: 0, date: now - 3600, kind: 'photo', out: false },
+    { msgId: 870, name: 'Платёжка_ноябрь.pdf', size: 214000, date: now - 2 * day, kind: 'file', out: false },
+    { msgId: 640, name: 'КП_бот_записи.pdf', size: 980000, date: now - 20 * day, kind: 'file', out: true },
+  ] : [] },
+  AttachReceiptFile: async (id, src) => {
+    await wait(300)
+    const r = receipts.find((x) => x.id === id); if (!r) throw new Error('чек не найден')
+    r.fileName = src.path ? src.path.split(/[\\/]/).pop() : 'Платёжка_ноябрь.png'
+    r.fileSize = 182000; r.fileSrc = src.path ? 'pc' : r.channel; r.hasFile = true
+    emit('receipts:changed', r.chatId); return { ...r }
+  },
+  RemoveReceiptFile: async (id) => { const r = receipts.find((x) => x.id === id); if (r) { r.fileName = ''; r.fileSize = 0; r.fileSrc = ''; r.hasFile = false; emit('receipts:changed', r.chatId) } return { ...r } },
+  OpenReceiptFile: async () => {},
+  RevealReceiptFile: async () => {},
   GetInfo: async () => ({ version: '0.4.0-demo', dataDir: '~/.config/SINAPS-CRM' }),
   OpenDataDir: async () => {},
   GetSettings: async () => ({ ...settings }),

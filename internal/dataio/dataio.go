@@ -501,7 +501,8 @@ func ExportReceiptsXLSX(rows []store.Receipt, label func(kind string) (string, b
 	_ = sw.SetColWidth(1, 1, 12)
 	_ = sw.SetColWidth(2, 2, 30)
 	_ = sw.SetColWidth(4, 4, 48)
-	if err := sw.SetRow("A1", cells([]string{"Дата", "Клиент", "Канал", "Из чего состоит", "Статус", "В счёт проекта", "Сверх проекта", "Итого", "Валюта"}, bold)); err != nil {
+	_ = sw.SetColWidth(10, 10, 28)
+	if err := sw.SetRow("A1", cells([]string{"Дата", "Клиент", "Канал", "Из чего состоит", "Статус", "В счёт проекта", "Сверх проекта", "Итого", "Валюта", "Файл"}, bold)); err != nil {
 		return err
 	}
 	for i, r := range rows {
@@ -523,7 +524,7 @@ func ExportReceiptsXLSX(rows []store.Receipt, label func(kind string) (string, b
 		cell, _ := excelize.CoordinatesToCellName(1, i+2)
 		if err := sw.SetRow(cell, []any{
 			time.Unix(r.PaidAt, 0).Format("02.01.2006"), r.ChatTitle, channelTitle(r.Channel), strings.Join(parts, "; "),
-			store.ReceiptStatusName(r.Status), inProj, extra, r.Amount, r.Currency,
+			store.ReceiptStatusName(r.Status), inProj, extra, r.Amount, r.Currency, r.FileName,
 		}); err != nil {
 			return err
 		}

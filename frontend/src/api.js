@@ -42,6 +42,14 @@ export const api = {
   chekiProject: (chatId) => call('ChekiProject', chatId),
   setChekiProject: (chatId, name, price) => call('SetChekiProject', chatId, name, price),
   chekiSummary: () => call('ChekiSummary'),
+  pickReceiptFile: () => call('PickReceiptFile'),
+  receiptChatFiles: (chatId) => call('ReceiptChatFiles', chatId),
+  attachReceiptFile: (id, src) => call('AttachReceiptFile', id, src),
+  removeReceiptFile: (id) => call('RemoveReceiptFile', id),
+  openReceiptFile: (id) => call('OpenReceiptFile', id),
+  revealReceiptFile: (id) => call('RevealReceiptFile', id),
+  // адрес файла для окна просмотра; v — чтобы после замены не показывался старый файл из кэша
+  receiptFileUrl: (r) => (inWails() ? `/cheki-file/${r.id}?v=${encodeURIComponent(r.fileSize + '-' + r.fileName)}` : mock.receiptFileUrl(r)),
   exportReceipts: (chatId = 0, period = 'year', kind = '') => call('ExportReceipts', { chatId, period, kind }),
 
   // плагин «Уведомления на телефон»

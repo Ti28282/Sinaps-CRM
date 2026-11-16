@@ -305,6 +305,9 @@ func (s *Store) migrate() error {
 	if err := s.migrateReceipts(); err != nil {
 		return err
 	}
+	if err := s.migrateReceiptFiles(); err != nil {
+		return err
+	}
 	return s.migrateReceiptParts()
 }
 

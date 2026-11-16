@@ -22,6 +22,11 @@ const num = (v) => Number(digits(v) || 0)
 const plural = (n, a, b, c) => (n % 10 === 1 && n % 100 !== 11 ? a : n % 10 >= 2 && n % 10 <= 4 && (n % 100 < 10 || n % 100 >= 20) ? b : c)
 const typeOf = (types, id) => types.find((t) => t.id === id) || { id, label: id.replace(/^c:/, ''), short: id.replace(/^c:/, ''), color: '#8A8F98', inProject: false }
 const emptyLine = (kind = PROJECT) => ({ kind, what: '', amount: '' })
+const isPdf = (name = '') => /\.pdf$/i.test(name)
+const isPic = (name = '') => /\.(jpe?g|png|webp|gif|bmp|svg)$/i.test(name)
+const kb = (n) => (!n ? '' : n >= 1 << 20 ? (n / (1 << 20)).toLocaleString('ru-RU', { maximumFractionDigits: 1 }) + ' МБ' : Math.max(1, Math.round(n / 1024)) + ' КБ')
+const SRC = { pc: 'загружен с компьютера', tg: 'из переписки Telegram', wa: 'из переписки WhatsApp' }
+const fileMeta = (size, src) => [kb(size), SRC[src]].filter(Boolean).join(' · ')
 const toParts = (lines) => lines.map((l) => ({ kind: l.kind, what: l.what, amount: num(l.amount) }))
 
 export default function Receipts({ toast, chats, openChat }) {
@@ -31,6 +36,8 @@ export default function Receipts({ toast, chats, openChat }) {
   const [rep, setRep] = useState(null)
   const [busy, setBusy] = useState(false)
   const [edit, setEdit] = useState(null) // чек, который правим
+  const [viewId, setViewId] = useState(0) // чек, файл которого смотрим
+  const [attachTo, setAttachTo] = useState(null) // чек, к которому прикладываем файл
 
   const load = useCallback(() => api.receipts(chatId, period, kind).then(setRep).catch((e) => toast(errText(e), 'err')), [chatId, period, kind, toast])
   useEffect(() => { load() }, [load])
@@ -154,7 +161,7 @@ export default function Receipts({ toast, chats, openChat }) {
           <div className="rc-scroll">
             <table className="rc-table">
               <thead>
-                <tr><th>Дата</th><th>Клиент</th><th>Из чего состоит</th><th>Статус</th><th className="num">Итого</th><th className="act"><span className="sr">Действия</span></th></tr>
+                <tr><th>Дата</th><th>Клиент</th><th>Из чего состоит</th><th>Файл</th><th>Статус</th><th className="num">Итого</th><th className="act"><span className="sr">Действия</span></th></tr>
               </thead>
               <tbody>
                 {rep.rows.map((r) => (
@@ -175,6 +182,15 @@ export default function Receipts({ toast, chats, openChat }) {
                           )
                         })}
                       </div>
+                    </td>
+                    <td className="rc-file-cell">
+                      {r.hasFile ? (
+                        <button type="button" className="rc-file-btn" title={`Посмотреть чек: ${r.fileName}`} onClick={() => setViewId(r.id)}>
+                          <Icon name={isPdf(r.fileName) ? 'file' : 'image'} size={14} /><span>{r.fileName}</span>
+                        </button>
+                      ) : (
+                        <button type="button" className="rc-file-add" title="Прикрепить файл чека" onClick={() => setAttachTo(r)}>+ файл</button>
+                      )}
                     </td>
                     <td><span className={'rc-st st-' + r.status}>{STATUS[r.status]}</span></td>
                     <td className="num mono nowrap">{money(r.amount, r.currency)}</td>
@@ -212,6 +228,11 @@ export default function Receipts({ toast, chats, openChat }) {
       </section>
 
       {edit && <EditReceipt r={edit} types={types} toast={toast} addType={addType} close={() => setEdit(null)} />}
+      {viewId > 0 && !attachTo && (
+        <ReceiptViewer rows={rep.rows.filter((r) => r.hasFile)} id={viewId} setId={setViewId} types={types} toast={toast}
+          replace={(r) => setAttachTo(r)} close={() => setViewId(0)} />
+      )}
+      {attachTo && <AttachDialog r={attachTo} toast={toast} close={() => setAttachTo(null)} done={(r) => { setAttachTo(null); setViewId(r.id) }} />}
     </div>
   )
 }
@@ -224,6 +245,15 @@ function NewReceipt({ chats, types, cur, toast, addType }) {
   const [status, setStatus] = useState('paid')
   const [busy, setBusy] = useState(false)
   const [done, setDone] = useState('')
+  const [file, setFile] = useState(null) // { src, name, size, from }
+
+  // файл, брошенный в окно на странице «Чеки», — это файл нового чека
+  useEffect(() => on('files:dropped', async (paths) => {
+    try {
+      const f = await api.fileInfo(paths[0])
+      setFile({ src: { path: f.path }, name: f.name, size: f.size, from: 'pc' }); setDone('')
+    } catch (e) { toast(errText(e), 'err') }
+  }), [toast])
 
   const inProj = (l) => typeOf(types, l.kind).inProject
   const total = lines.reduce((a, l) => a + num(l.amount), 0)
@@ -236,8 +266,12 @@ function NewReceipt({ chats, types, cur, toast, addType }) {
     setBusy(true)
     try {
       const r = await api.createReceipt({ chatId, date, status, parts: toParts(lines) })
-      setDone(`Чек создан: ${r.chatTitle} · ${money(r.amount, r.currency)}`)
-      setLines([emptyLine()]); setStatus('paid')
+      let note = ''
+      if (file) {
+        try { await api.attachReceiptFile(r.id, file.src) } catch (err) { note = ' · файл не приложен'; toast('Чек создан, но файл не приложен: ' + errText(err), 'err') }
+      }
+      setDone(`Чек создан: ${r.chatTitle} · ${money(r.amount, r.currency)}${note}`)
+      setLines([emptyLine()]); setStatus('paid'); setFile(null)
     } catch (err) { toast(errText(err), 'err') } finally { setBusy(false) }
   }
 
@@ -252,7 +286,7 @@ function NewReceipt({ chats, types, cur, toast, addType }) {
         <div className="rc-new-left">
           <div className="field">
             <span>Клиент из воронки</span>
-            <ClientPicker chats={chats} value={chatId} onChange={(id) => { setChatId(id); setDone('') }} />
+            <ClientPicker chats={chats} value={chatId} onChange={(id) => { setChatId(id); setDone(''); if (file?.from === 'chat') setFile(null) }} />
           </div>
           {chatId ? <ProjectCard chatId={chatId} cur={cur} projNow={status === 'paid' ? projNow : 0} extraNow={status === 'paid' ? total - projNow : 0} toast={toast} /> : (
             <p className="hint" style={{ fontSize: 13 }}>Выберите клиента — здесь появится его проект: стоимость, сколько оплачено и сколько осталось.</p>
@@ -264,6 +298,7 @@ function NewReceipt({ chats, types, cur, toast, addType }) {
             <span className="hint" style={{ fontSize: 12, marginLeft: 'auto' }}>часть «В счёт проекта» уменьшает остаток по проекту</span>
           </div>
           <PartsEditor lines={lines} setLines={(l) => { setLines(l); setDone('') }} types={types} cur={cur} addType={addType} />
+          <FileField file={file} setFile={(f) => { setFile(f); setDone('') }} chatId={chatId} toast={toast} />
           <div className="row" style={{ gap: 12 }}>
             <label className="row hint" style={{ gap: 8, fontSize: 13 }}>Дата
               <input className="input input-sm" type="date" value={date} onChange={(e) => setDate(e.target.value)} />
@@ -280,7 +315,7 @@ function NewReceipt({ chats, types, cur, toast, addType }) {
             <span className="hint" style={{ fontSize: 13 }}>в счёт проекта {money(projNow, cur)} · сверх проекта {money(total - projNow, cur)}</span>
             <span className="hint" style={{ marginLeft: 'auto', fontSize: 13 }}>Итого чек</span>
             <span className="mono rc-total-sum">{money(total, cur)}</span>
-            <button type="submit" className="btn btn-primary" disabled={!ok || busy}>{busy ? 'Создаём…' : 'Создать чек'}</button>
+            <button type="submit" className="btn btn-primary" disabled={!ok || busy}>{busy ? (file ? 'Создаём и прикладываем файл…' : 'Создаём…') : 'Создать чек'}</button>
           </div>
         </div>
       </div>
@@ -522,6 +557,211 @@ function EditReceipt({ r, types, toast, addType, close }) {
           <button type="submit" className="btn btn-primary" disabled={busy}>{busy ? 'Сохраняем…' : 'Сохранить'}</button>
         </div>
       </form>
+    </div>
+  )
+}
+
+// «Файл чека» в форме: выбранный файл или кнопки «С компьютера» / «Из переписки клиента».
+function FileField({ file, setFile, chatId, toast }) {
+  const [list, setList] = useState(false)
+  async function fromPc() {
+    try {
+      const f = await api.pickReceiptFile()
+      if (f?.path) setFile({ src: { path: f.path }, name: f.name, size: f.size, from: 'pc' })
+    } catch (e) { toast(errText(e), 'err') }
+  }
+  return (
+    <div className={'rc-file-field' + (file ? ' has' : '')}>
+      <span className="hint" style={{ fontSize: 12 }}>Файл чека</span>
+      {file ? (
+        <span className="rc-file-chip">
+          <span className="rc-file-ico"><Icon name={isPdf(file.name) ? 'file' : 'image'} size={16} /></span>
+          <span style={{ minWidth: 0 }}>
+            <span className="rc-file-name">{file.name}</span>
+            <span className="hint" style={{ fontSize: 12 }}>{fileMeta(file.size, file.from === 'pc' ? 'pc' : file.channel)}</span>
+          </span>
+          <button type="button" className="msg-act" aria-label="Убрать файл" title="Убрать файл" onClick={() => setFile(null)}><Icon name="close" size={14} /></button>
+        </span>
+      ) : (
+        <>
+          <button type="button" className="btn btn-sm" onClick={fromPc}><Icon name="clip" size={15} /> С компьютера</button>
+          <span className="rc-file-pop-wrap">
+            <button type="button" className="btn btn-sm" disabled={!chatId} title={chatId ? '' : 'Сначала выберите клиента'} aria-expanded={list} onClick={() => setList((v) => !v)}>
+              <Icon name="chat" size={15} /> Из переписки клиента
+            </button>
+            {list && chatId > 0 && (
+              <ChatFilesPop chatId={chatId} toast={toast} close={() => setList(false)}
+                pick={(f, channel) => { setFile({ src: { chatId, msgId: f.msgId }, name: f.name, size: f.size, from: 'chat', channel }); setList(false) }} />
+            )}
+          </span>
+          <span className="hint" style={{ fontSize: 12 }}>PDF или фото, можно перетащить сюда · необязательно</span>
+        </>
+      )}
+    </div>
+  )
+}
+
+// Список файлов и фото из переписки клиента.
+function ChatFilesPop({ chatId, toast, pick, close, inline }) {
+  const [files, setFiles] = useState(null)
+  const [channel, setChannel] = useState('tg')
+  const box = useRef(null)
+  useEffect(() => {
+    api.receiptChatFiles(chatId).then(setFiles).catch((e) => { toast(errText(e), 'err'); setFiles([]) })
+    api.chat(chatId).then((v) => setChannel(v.chat.channel)).catch(() => {})
+  }, [chatId, toast])
+  useEffect(() => {
+    if (inline) return
+    const off = (e) => { if (box.current && !box.current.contains(e.target)) close() }
+    const esc = (e) => e.key === 'Escape' && close()
+    document.addEventListener('mousedown', off)
+    document.addEventListener('keydown', esc)
+    return () => { document.removeEventListener('mousedown', off); document.removeEventListener('keydown', esc) }
+  }, [close, inline])
+  return (
+    <div className={inline ? 'rc-chat-files inline' : 'rc-chat-files'} ref={box} role="listbox" aria-label="Файлы из переписки">
+      {!files && <div className="hint" style={{ padding: 12 }}>Загрузка…</div>}
+      {files && files.length === 0 && <div className="hint" style={{ padding: 12 }}>В переписке с клиентом нет файлов и фото</div>}
+      {files?.map((f) => (
+        <button key={f.msgId} type="button" role="option" aria-selected="false" className="picker-opt" onClick={() => pick(f, channel)}>
+          <span className="rc-file-ico"><Icon name={f.kind === 'photo' ? 'image' : 'file'} size={16} /></span>
+          <span style={{ minWidth: 0, flex: 1 }}>
+            <span className="rc-file-name">{f.name}</span>
+            <span className="hint" style={{ fontSize: 12 }}>{[kb(f.size), new Date(f.date * 1000).toLocaleString('ru-RU', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }), f.out ? 'отправили вы' : 'от клиента'].filter(Boolean).join(' · ')}</span>
+          </span>
+        </button>
+      ))}
+    </div>
+  )
+}
+
+// Приложить или заменить файл у готового чека.
+function AttachDialog({ r, toast, close, done }) {
+  const [busy, setBusy] = useState(false)
+  async function attach(src) {
+    setBusy(true)
+    try { const n = await api.attachReceiptFile(r.id, src); toast('Файл приложен к чеку'); done(n) } catch (e) { toast(errText(e), 'err') } finally { setBusy(false) }
+  }
+  async function fromPc() {
+    try { const f = await api.pickReceiptFile(); if (f?.path) attach({ path: f.path }) } catch (e) { toast(errText(e), 'err') }
+  }
+  useEffect(() => {
+    const onKey = (e) => e.key === 'Escape' && close()
+    window.addEventListener('keydown', onKey)
+    const off = on('files:dropped', (paths) => attach({ path: paths[0] }))
+    return () => { window.removeEventListener('keydown', onKey); off && off() }
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+  return (
+    <div className="modal-back" onMouseDown={(e) => e.target === e.currentTarget && !busy && close()}>
+      <div className="modal" style={{ width: 'min(520px, 100%)' }} role="dialog" aria-modal="true" aria-labelledby="af-title">
+        <div className="modal-head">
+          <div>
+            <h2 id="af-title">{r.hasFile ? 'Заменить файл чека' : 'Файл чека'}</h2>
+            <p className="hint" style={{ marginTop: 4 }}>{r.chatTitle} · {money(r.amount, r.currency)} · {new Date(r.paidAt * 1000).toLocaleDateString('ru-RU')}</p>
+          </div>
+          <button type="button" className="icon-btn" aria-label="Закрыть" onClick={close} disabled={busy}><Icon name="close" /></button>
+        </div>
+        <button type="button" className="btn" onClick={fromPc} disabled={busy}><Icon name="clip" size={16} /> С компьютера</button>
+        <div className="hint" style={{ fontSize: 12 }}>Или из переписки клиента:</div>
+        {busy ? <p className="hint">Прикладываем файл…</p> : <ChatFilesPop inline chatId={r.chatId} toast={toast} close={close} pick={(f) => attach({ chatId: r.chatId, msgId: f.msgId })} />}
+        <p className="hint" style={{ fontSize: 12, margin: 0 }}>PDF или фото, можно перетащить в окно. CRM сохранит копию в своей папке данных.</p>
+      </div>
+    </div>
+  )
+}
+
+// Просмотр файла чека: картинка с масштабом колесом мыши, PDF — встроенным просмотрщиком.
+function ReceiptViewer({ rows, id, setId, types, toast, replace, close }) {
+  const i = rows.findIndex((r) => r.id === id)
+  const r = rows[i]
+  const [zoom, setZoom] = useState(1)
+  const [fit, setFit] = useState(0) // ширина картинки «целиком в окне», от неё считается масштаб
+  const [broken, setBroken] = useState('')
+  const go = useCallback((d) => { if (rows.length) setId(rows[(i + d + rows.length) % rows.length].id) }, [rows, i, setId])
+
+  useEffect(() => { setZoom(1); setFit(0); setBroken('') }, [id, r?.fileName])
+  useEffect(() => { if (!r) close() }, [r, close])
+  useEffect(() => {
+    const onKey = (e) => {
+      if (e.key === 'Escape') close()
+      if (e.key === 'ArrowLeft') go(-1)
+      if (e.key === 'ArrowRight') go(1)
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [go, close])
+
+  if (!r) return null
+  const url = api.receiptFileUrl(r)
+  const pic = isPic(r.fileName)
+  const pdf = isPdf(r.fileName)
+  const act = (fn) => fn().catch((e) => toast(errText(e), 'err'))
+  async function removeFile() {
+    if (!window.confirm(`Убрать файл «${r.fileName}» у чека? Сам чек останется.`)) return
+    try { await api.removeReceiptFile(r.id); toast('Файл убран') } catch (e) { toast(errText(e), 'err') }
+  }
+
+  return (
+    <div className="modal-back rc-viewer-back" onMouseDown={(e) => e.target === e.currentTarget && close()}>
+      <div className="rc-viewer" role="dialog" aria-modal="true" aria-label="Просмотр чека">
+        <div className="rc-viewer-main">
+          <div className="rc-viewer-bar">
+            <button type="button" className="icon-btn" aria-label="Предыдущий чек" onClick={() => go(-1)} disabled={rows.length < 2}><Icon name="back" /></button>
+            <span className="hint" style={{ fontSize: 13 }}>Чек {i + 1} из {rows.length} с файлом</span>
+            <button type="button" className="icon-btn" aria-label="Следующий чек" onClick={() => go(1)} disabled={rows.length < 2}><Icon name="back" style={{ transform: 'scaleX(-1)' }} /></button>
+            {pic && !broken && <span className="hint" style={{ fontSize: 12, marginLeft: 'auto' }}>колесо мыши — масштаб · {Math.round(zoom * 100)}%</span>}
+          </div>
+          <div className="rc-viewer-stage" onWheel={pic ? (e) => setZoom((z) => Math.min(5, Math.max(0.3, z * (e.deltaY < 0 ? 1.12 : 1 / 1.12)))) : undefined}>
+            {broken ? (
+              <div className="rc-viewer-none"><Icon name="warn" size={28} /><p>{broken}</p></div>
+            ) : pic ? (
+              <img key={url} src={url} alt={`Файл чека ${r.fileName}`}
+                style={zoom === 1 || !fit ? { maxWidth: '100%', maxHeight: '100%' } : { width: fit * zoom }}
+                onLoad={(e) => setFit(e.currentTarget.clientWidth)} onError={() => setBroken('Не удалось показать файл. Попробуйте «Открыть».')} />
+            ) : pdf ? (
+              <iframe key={url} src={url} title={`Файл чека ${r.fileName}`} />
+            ) : (
+              <div className="rc-viewer-none"><Icon name="file" size={28} /><p>Этот файл здесь не показать — нажмите «Открыть».</p></div>
+            )}
+          </div>
+        </div>
+        <aside className="rc-viewer-side">
+          <div className="row" style={{ flexWrap: 'nowrap', alignItems: 'flex-start' }}>
+            <div style={{ minWidth: 0 }}>
+              <h2 style={{ margin: 0, fontSize: 19 }}>Чек · <span className="mono">{money(r.amount, r.currency)}</span></h2>
+              <p className="hint" style={{ margin: '4px 0 0' }}>{r.chatTitle} · {new Date(r.paidAt * 1000).toLocaleDateString('ru-RU')} · {STATUS[r.status]}</p>
+            </div>
+            <button type="button" className="icon-btn" style={{ marginLeft: 'auto' }} aria-label="Закрыть" onClick={close}><Icon name="close" /></button>
+          </div>
+          <div className="rc-viewer-parts">
+            {r.parts.map((p, k) => {
+              const t = typeOf(types, p.kind)
+              return (
+                <div key={k} className="row" style={{ flexWrap: 'nowrap', gap: 10 }}>
+                  <i className="rc-dot" style={{ background: t.color }} aria-hidden="true" />
+                  <span style={{ minWidth: 0, flex: 1 }}><span style={{ display: 'block' }}>{t.label}</span>{p.what && <span className="hint" style={{ fontSize: 12 }}>{p.what}</span>}</span>
+                  <span className="mono">{money(p.amount, r.currency)}</span>
+                </div>
+              )
+            })}
+            <div className="row rc-viewer-total"><span>Итого</span><span className="mono" style={{ marginLeft: 'auto' }}>{money(r.amount, r.currency)}</span></div>
+          </div>
+          <div className="rc-file-chip">
+            <span className="rc-file-ico"><Icon name={pdf ? 'file' : 'image'} size={16} /></span>
+            <span style={{ minWidth: 0 }}>
+              <span className="rc-file-name">{r.fileName}</span>
+              <span className="hint" style={{ fontSize: 12 }}>{fileMeta(r.fileSize, r.fileSrc || (r.msgId ? r.channel : ''))}</span>
+            </span>
+          </div>
+          <div className="rc-viewer-acts">
+            <button type="button" className="btn btn-sm btn-inv" onClick={() => act(() => api.openReceiptFile(r.id))}>Открыть</button>
+            <button type="button" className="btn btn-sm" onClick={() => act(() => api.revealReceiptFile(r.id))}>Показать в папке</button>
+            <button type="button" className="btn btn-sm" onClick={() => replace(r)}>Заменить файл</button>
+            <button type="button" className="btn btn-sm btn-quiet danger-text" onClick={removeFile}>Убрать файл</button>
+          </div>
+          <p className="hint" style={{ fontSize: 12, margin: 0 }}>Файл хранится в папке данных CRM (receipts/) — копия, даже если сообщение в переписке удалят.</p>
+        </aside>
+      </div>
     </div>
   )
 }

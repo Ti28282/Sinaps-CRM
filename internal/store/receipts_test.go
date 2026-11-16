@@ -53,6 +53,32 @@ func TestReceiptsAndHide(t *testing.T) {
 		t.Fatalf("project %+v", p)
 	}
 
+	// файл чека: копия в папке данных, потом убрали
+	if err := s.SetReceiptFile(ctx, r1.ID, "чек.pdf", "1-ab-чек.pdf", 1200, "pc", 0); err != nil {
+		t.Fatal(err)
+	}
+	if r, _ := s.ReceiptByID(ctx, r1.ID); !r.HasFile || r.FileName != "чек.pdf" || r.FilePath != "1-ab-чек.pdf" || r.FileSize != 1200 || r.FileSrc != "pc" || r.Amount != 6000 {
+		t.Fatalf("file %+v", r)
+	}
+	if used, _ := s.ReceiptFilePaths(ctx); !used["1-ab-чек.pdf"] {
+		t.Fatal("copy not listed")
+	}
+	if err := s.ClearReceiptFile(ctx, r1.ID); err != nil {
+		t.Fatal(err)
+	}
+	if r, _ := s.ReceiptByID(ctx, r1.ID); r.HasFile || r.FileName != "" {
+		t.Fatalf("not cleared %+v", r)
+	}
+	if err := s.SetReceiptFile(ctx, 999, "x", "x", 1, "pc", 0); err == nil {
+		t.Fatal("unknown receipt must fail")
+	}
+	if _, err := s.AddMessage(ctx, Message{ChatID: id, MsgID: 2, MediaKind: "photo", Date: 150}, false); err != nil {
+		t.Fatal(err)
+	}
+	if ms, _ := s.MediaMessages(ctx, id, 10); len(ms) != 1 || ms[0].MsgID != 2 {
+		t.Fatalf("media %+v", ms)
+	}
+
 	// убрать сообщение из CRM: синхронизация его не возвращает
 	if err := s.HideMessage(ctx, id, 1); err != nil {
 		t.Fatal(err)

@@ -299,6 +299,7 @@ func (a *App) DeleteReceipt(id int64) error {
 	if err := a.st.DeleteReceipt(a.ctx, id); err != nil {
 		return err
 	}
+	a.dropReceiptCopy(r.FilePath)
 	_ = a.st.AddEvent(a.ctx, r.ChatID, "receipt", "Чек удалён · "+fmtMoney(r.Amount, r.Currency))
 	a.afterReceipts(r.ChatID, a.cheki(), false)
 	return nil

@@ -26,7 +26,7 @@ import (
 	"sinaps-crm/internal/whatsapp"
 )
 
-const version = "0.5.0"
+const version = "0.6.0"
 
 // App — всё, что видит фронт: каждый экспортируемый метод доступен как
 // window.go.main.App.<Method>() и возвращает Promise.
@@ -417,6 +417,10 @@ func (a *App) mediaHandler() http.Handler {
 	var locks sync.Map
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		parts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
+		if len(parts) == 2 && parts[0] == "cheki-file" {
+			a.serveReceiptFile(w, r, parts[1]) // плагин «Чеки»: просмотр файла чека
+			return
+		}
 		if len(parts) != 3 || parts[0] != "media" {
 			http.NotFound(w, r)
 			return
