@@ -8,6 +8,7 @@ import Connect from './pages/Connect.jsx'
 import Settings from './pages/Settings.jsx'
 import Receipts from './pages/Receipts.jsx'
 import Notify from './pages/Notify.jsx'
+import Search from './components/Search.jsx'
 
 const NAV = [
   { id: 'pipeline', label: 'Воронка', icon: 'board' },
@@ -32,6 +33,10 @@ export default function App() {
   const [settings, setSettings] = useState(null)
   const [plugins, setPlugins] = useState(null)
   const [toasts, setToasts] = useState([])
+  const [searchOpen, setSearchOpen] = useState(false)
+  const [chatFocus, setChatFocus] = useState(null) // { chatId, msgId, n } — прокрутить переписку к сообщению
+  const [receiptFocus, setReceiptFocus] = useState(null) // { id, chatId, view, n } — показать чек в «Чеках»
+  const [settingsTab, setSettingsTab] = useState(null)
   const tid = useRef(0)
 
   const toast = useCallback((text, kind = 'ok') => {
@@ -79,6 +84,18 @@ export default function App() {
     return () => { window.removeEventListener('focus', tell); window.removeEventListener('blur', tell); document.removeEventListener('visibilitychange', tell) }
   }, [])
 
+  // поиск по всему: Ctrl+K (⌘K) на любой странице, в любой раскладке
+  useEffect(() => {
+    const onKey = (e) => {
+      if ((e.ctrlKey || e.metaKey) && !e.altKey && (e.code === 'KeyK' || e.key === 'k' || e.key === 'л')) {
+        e.preventDefault()
+        setSearchOpen((v) => !v)
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [])
+
   // когда ещё ничего не подключено — сразу на экран подключения
   useEffect(() => {
     if (settings && !settings.tgFolderId && chats.length === 0) setPage('connect')
@@ -93,6 +110,12 @@ export default function App() {
   const unread = chats.filter((c) => c.unread).length
   const tgCount = chats.filter((c) => c.channel === 'tg').length
   const go = (p, chatId) => { setPage(p); if (chatId !== undefined) setOpenChat(chatId) }
+  const n = () => Date.now()
+  const searchTo = {
+    openChat: (chatId, msgId) => { go('chats', chatId); setChatFocus(msgId ? { chatId, msgId, n: n() } : null) },
+    openReceipt: (r, view) => { setReceiptFocus({ id: r.id, chatId: r.chatId, view: !!view, n: n() }); go('cheki') },
+    openPage: (p, tab) => { if (p === 'settings') setSettingsTab({ tab, n: n() }); go(p) },
+  }
 
   return (
     <div className="shell">
@@ -102,6 +125,11 @@ export default function App() {
           <div className="brand-mark">S</div>
           <div className="brand-name">SINAPS <span>CRM</span></div>
         </div>
+        <button type="button" className="nav-search" title="Поиск по всему (Ctrl+K)" aria-label="Поиск по всему, Ctrl+K" onClick={() => setSearchOpen(true)}>
+          <Icon name="search" size={17} />
+          <span className="nav-label">Поиск</span>
+          <kbd className="nav-label">Ctrl K</kbd>
+        </button>
         <nav className="nav" aria-label="Основное">
           {NAV.map((n) => (
             <button key={n.id} type="button" title={n.label} aria-current={page === n.id ? 'page' : undefined} onClick={() => go(n.id)}>
@@ -156,13 +184,15 @@ export default function App() {
 
       <main className="main">
         {page === 'pipeline' && <Pipeline chats={chats} tg={tg} toast={toast} openChat={(id) => go('chats', id)} />}
-        {page === 'chats' && <Chats chats={chats} openId={openChat} setOpenId={setOpenChat} toast={toast} tg={tg} wa={wa} plugins={plugins} />}
+        {page === 'chats' && <Chats chats={chats} openId={openChat} setOpenId={setOpenChat} toast={toast} tg={tg} wa={wa} plugins={plugins} focus={chatFocus} />}
         {page === 'broadcast' && <Broadcast chats={chats} settings={settings} reloadSettings={reloadSettings} tg={tg} toast={toast} />}
-        {page === 'settings' && <Settings settings={settings} reloadSettings={reloadSettings} toast={toast} plugins={plugins} setPlugins={setPlugins} openPage={go} />}
-        {page === 'cheki' && pluginOn(plugins, 'cheki') && <Receipts toast={toast} chats={chats} openChat={(id) => go('chats', id)} />}
+        {page === 'settings' && <Settings settings={settings} reloadSettings={reloadSettings} toast={toast} plugins={plugins} setPlugins={setPlugins} openPage={go} tab={settingsTab} />}
+        {page === 'cheki' && pluginOn(plugins, 'cheki') && <Receipts toast={toast} chats={chats} openChat={(id) => go('chats', id)} focus={receiptFocus} />}
         {page === 'notify' && pluginOn(plugins, 'notify') && <Notify toast={toast} plugins={plugins} />}
         {page === 'connect' && <Connect tg={tg} wa={wa} settings={settings} reloadSettings={reloadSettings} toast={toast} done={() => go('pipeline')} />}
       </main>
+
+      {searchOpen && <Search close={() => setSearchOpen(false)} chats={chats} plugins={plugins} toast={toast} {...searchTo} />}
 
       <div className="toasts" aria-live="polite">
         {toasts.map((t) => <div key={t.id} className={'toast ' + t.kind}>{t.text}</div>)}

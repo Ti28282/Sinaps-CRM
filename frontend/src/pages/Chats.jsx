@@ -2,7 +2,7 @@ import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
 import { api, on, STAGES, errText, when, clock, dayLabel, pluginOn, money } from '../api.js'
 import { Avatar, ChannelChip, Icon } from '../components/ui.jsx'
 
-export default function Chats({ chats, openId, setOpenId, toast, tg, wa, plugins }) {
+export default function Chats({ chats, openId, setOpenId, toast, tg, wa, plugins, focus }) {
   const [q, setQ] = useState('')
   const [view, setView] = useState('thread') // узкое окно: list | thread
   const [cardOpen, setCardOpen] = useState(false) // окно ≤1280: карточка клиента поверх переписки
@@ -43,14 +43,15 @@ export default function Chats({ chats, openId, setOpenId, toast, tg, wa, plugins
         </div>
       </aside>
       {openId ? <Thread key={openId} id={openId} toast={toast} tg={tg} wa={wa} cheki={pluginOn(plugins, 'cheki')} onDeleted={() => setOpenId(null)}
-          onBack={() => setView('list')} cardOpen={cardOpen} toggleCard={() => setCardOpen((v) => !v)} /> : (
+          onBack={() => setView('list')} cardOpen={cardOpen} toggleCard={() => setCardOpen((v) => !v)}
+          focus={focus && focus.chatId === openId ? focus : null} /> : (
         <div className="empty"><div><Icon name="chat" size={36} /><h3>Нет диалогов</h3><p>Подключите Telegram и выберите папку с клиентами.</p></div></div>
       )}
     </div>
   )
 }
 
-function Thread({ id, toast, tg, wa, cheki, onDeleted, onBack, cardOpen, toggleCard }) {
+function Thread({ id, toast, tg, wa, cheki, onDeleted, onBack, cardOpen, toggleCard, focus }) {
   const [view, setView] = useState(null)
   const [text, setText] = useState('')
   const [sending, setSending] = useState(false)
@@ -112,6 +113,31 @@ function Thread({ id, toast, tg, wa, cheki, onDeleted, onBack, cardOpen, toggleC
       setDown((d) => ({ show: true, n: d.n + added }))
     }
   }, [view?.messages.length]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // из поиска: прокрутить к найденному сообщению и подсветить его
+  useEffect(() => {
+    if (!focus || !view) return
+    let alive = true
+    const show = () => setTimeout(() => {
+      const el = body.current?.querySelector(`[data-msg="${focus.msgId}"]`)
+      if (!el) return toast('Это сообщение больше не показывается в переписке', 'err')
+      atBottom.current = false
+      el.scrollIntoView({ block: 'center' })
+      el.classList.remove('flash'); void el.offsetWidth; el.classList.add('flash')
+    }, 60)
+    if (view.messages.some((m) => m.msgId === focus.msgId)) show()
+    else {
+      // сообщение старше последних 500 — подгружаем переписку с него
+      api.chatAround(id, focus.msgId).then((msgs) => {
+        if (!alive) return
+        atBottom.current = false
+        lastLen.current = msgs.length
+        setView((v) => v && { ...v, messages: msgs })
+        show()
+      }).catch((e) => toast(errText(e), 'err'))
+    }
+    return () => { alive = false }
+  }, [focus?.n, !!view]) // eslint-disable-line react-hooks/exhaustive-deps
 
   function onScroll(e) {
     const el = e.currentTarget
@@ -204,7 +230,7 @@ function Thread({ id, toast, tg, wa, cheki, onDeleted, onBack, cardOpen, toggleC
             return (
               <Fragment key={m.msgId}>
                 {showDay && <div className="day">{d}</div>}
-                <div className={'bubble' + (m.out ? ' out' : '') + (m.deleted ? ' deleted' : '') + (m.mediaKind === 'photo' ? ' has-photo' : '')}>
+                <div data-msg={m.msgId} className={'bubble' + (m.out ? ' out' : '') + (m.deleted ? ' deleted' : '') + (m.mediaKind === 'photo' ? ' has-photo' : '')}>
                   {m.mediaKind === 'photo' && <Photo m={m} open={setPhoto} />}
                   {m.mediaKind === 'file' && <FileCard m={m} toast={toast} />}
                   {m.text && <div className="bubble-text">{m.text}</div>}

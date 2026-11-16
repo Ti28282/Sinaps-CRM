@@ -185,7 +185,10 @@ CREATE TABLE IF NOT EXISTS receipt_projects(
 
 var Stages = []string{"new", "sent", "replied", "deal", "lost"}
 
-type Store struct{ db *sql.DB }
+type Store struct {
+	db  *sql.DB
+	fts bool // есть полнотекстовый индекс переписки (FTS5) — иначе поиск перебором
+}
 
 type Chat struct {
 	ID         int64  `json:"id"`
@@ -269,6 +272,7 @@ func Open(path string) (*Store, error) {
 		db.Close()
 		return nil, fmt.Errorf("migrate: %w", err)
 	}
+	st.initSearch()
 	return st, nil
 }
 

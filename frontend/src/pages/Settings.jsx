@@ -9,8 +9,9 @@ const TABS = [
   { id: 'plugins', label: 'Плагины' },
 ]
 
-export default function Settings({ settings, reloadSettings, toast, plugins, setPlugins, openPage }) {
-  const [tab, setTab] = useState('appearance')
+export default function Settings({ settings, reloadSettings, toast, plugins, setPlugins, openPage, tab: want }) {
+  const [tab, setTab] = useState(want?.tab || 'appearance')
+  useEffect(() => { if (want?.tab) setTab(want.tab) }, [want?.n]) // eslint-disable-line react-hooks/exhaustive-deps
   return (
     <div className="page">
       <header className="page-head">

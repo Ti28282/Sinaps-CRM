@@ -41,7 +41,46 @@ messages[fp.id].push({ id: 502, chatId: fp.id, msgId: 502, out: false, date: fp.
 messages[fp.id].splice(1, 0, { id: 501, chatId: fp.id, msgId: 501, out: false, date: fp.lastAt - 1200, text: 'Ой, не туда отправил', deleted: true })
 const ml = chats.find((c) => c.title.startsWith('Клиника'))
 messages[ml.id].push({ id: 600, chatId: ml.id, msgId: 600, out: false, date: ml.lastAt + 120, text: '', mediaKind: 'file', fileName: 'Платёжное поручение №418.pdf', fileSize: 186_000 })
+messages[ml.id].unshift(
+  { id: 601, chatId: ml.id, msgId: 590, out: false, date: ml.lastAt - 20 * 24 * h, text: 'Можно в бот добавить запись к медсестре на анализы?' },
+  { id: 602, chatId: ml.id, msgId: 591, out: true, date: ml.lastAt - 20 * 24 * h + 900, text: 'Да, добавлю отдельной кнопкой «Анализы». Это войдёт в этап 2.' },
+  { id: 603, chatId: ml.id, msgId: 592, out: true, date: ml.lastAt - 26 * h, text: 'Отправил счёт на этап 2 — 25 000 ₽' },
+)
 const events = {}
+events[ml.id] = [{ kind: 'note', text: 'Заметка: главврач отвечает утром, писать до 11:00', at: ml.lastAt - 5 * 24 * h }, { kind: 'stage', text: 'Этап → Сделка', at: ml.lastAt - 2 * 24 * h }]
+// демо-поиск: те же правила, что в Go (начало слова, ё = е, сумма по цифрам)
+const norm = (s) => String(s || '').toLowerCase().replace(/ё/g, 'е')
+const words = (q) => norm(q).split(/[^\p{L}\p{N}]+/u).filter(Boolean)
+const matchWords = (text, ws) => { const tw = words(text); return ws.length > 0 && ws.every((w) => tw.some((t) => t.startsWith(w))) }
+function demoAmount(q) {
+  const m = String(q).toLowerCase().match(/^\s*(\d[\d\s]*(?:[.,]\d+)?)\s*(к|k|тыс\.?)?\s*(₽|руб\.?|р\.?|сом|₸|\$)?\s*$/)
+  if (!m) return 0
+  let f = parseFloat(m[1].replace(/\s/g, '').replace(',', '.')); if (m[2]) f *= 1000
+  return f < 100 ? 0 : Math.round(f)
+}
+function demoSearch(q) {
+  const ws = words(q)
+  const out = { q, clients: [], messages: [], receipts: [], files: [], events: [], counts: {}, amount: demoAmount(q) }
+  if (!ws.length) return out
+  const nq = ws.join(' '), dq = String(q).replace(/\D/g, '')
+  const push = (k, list, x) => { out.counts[k] = (out.counts[k] || 0) + 1; if (list.length < 50) list.push(x) }
+  chats.forEach((c) => { if (norm(c.title).includes(nq) || matchWords(c.title + ' ' + c.username + ' ' + c.note + ' ' + c.nextStep + ' ' + c.tags, ws) || (dq.length >= 4 && c.phone.replace(/\D/g, '').includes(dq)) || (out.amount && c.amount === out.amount)) push('client', out.clients, c) })
+  const all = Object.values(messages).flat().sort((a, b) => b.date - a.date)
+  all.forEach((m) => {
+    const c = find(m.chatId); if (!c) return
+    if (m.text && (matchWords(m.text, ws) || (out.amount && m.text.replace(/\s/g, '').includes(String(out.amount))))) push('msg', out.messages, { ...m, chatTitle: c.title, channel: c.channel, snippet: m.text })
+    if (m.mediaKind === 'file' && (norm(m.fileName).includes(nq) || matchWords(m.fileName, ws))) push('file', out.files, { ...m, chatTitle: c.title, channel: c.channel })
+  })
+  Object.entries(events).forEach(([id, list]) => list.forEach((e) => { const c = find(Number(id)); if (c && matchWords(e.text, ws)) push('event', out.events, { chatId: c.id, chatTitle: c.title, channel: c.channel, kind: e.kind, text: e.text, at: e.at }) }))
+  if (pluginsView().items.some((p) => p.id === 'cheki' && p.status === 'on')) {
+    receipts.slice().sort((a, b) => b.paidAt - a.paidAt).forEach((r) => {
+      const text = r.chatTitle + ' ' + r.what + ' ' + r.fileName + ' ' + r.parts.map((p) => (allTypes().find((t) => t.id === p.kind)?.label || '') + ' ' + p.what).join(' ')
+      const ok = out.amount ? r.amount === out.amount || r.parts.some((p) => p.amount === out.amount) : matchWords(text, ws) || norm(r.chatTitle).includes(nq)
+      if (ok) push('receipt', out.receipts, r)
+    })
+  }
+  return out
+}
 let savedTheme = 'dark'
 try { savedTheme = localStorage.getItem('sinaps-theme') || 'dark' } catch {}
 const hiddenExt = new Set()
@@ -179,6 +218,9 @@ const setStatus = (s) => { status = s; emit('tg:status', s) }
 
 export const mock = {
   receiptFileUrl: (r) => receiptPicture(r),
+  Search: async (q) => { await wait(60); return demoSearch(q) },
+  SearchContext: async (chatId, msgId) => { const l = messages[chatId] || []; const i = l.findIndex((m) => m.msgId === msgId); return i < 0 ? [] : l.slice(Math.max(0, i - 2), i + 3) },
+  ChatAround: async (chatId) => [...(messages[chatId] || [])],
   PickReceiptFile: async () => ({ path: '/home/timur/Загрузки/Чек_Сбер_' + new Date().toLocaleDateString('ru-RU') + '.png', name: 'Чек_Сбер_' + new Date().toLocaleDateString('ru-RU') + '.png', size: 182000, isImage: true }),
   ReceiptChatFiles: async (chatId) => { await wait(250); return chatId % 2 ? [
     { msgId: 901, name: 'Фото ' + new Date((now - 3600) * 1000).toLocaleDateString('ru-RU') + '.jpg', size: 0, date: now - 3600, kind: 'photo', out: false },

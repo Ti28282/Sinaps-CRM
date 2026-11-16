@@ -29,7 +29,7 @@ const SRC = { pc: 'загружен с компьютера', tg: 'из пере
 const fileMeta = (size, src) => [kb(size), SRC[src]].filter(Boolean).join(' · ')
 const toParts = (lines) => lines.map((l) => ({ kind: l.kind, what: l.what, amount: num(l.amount) }))
 
-export default function Receipts({ toast, chats, openChat }) {
+export default function Receipts({ toast, chats, openChat, focus }) {
   const [chatId, setChatId] = useState(0)
   const [period, setPeriod] = useState('year')
   const [kind, setKind] = useState('')
@@ -38,6 +38,26 @@ export default function Receipts({ toast, chats, openChat }) {
   const [edit, setEdit] = useState(null) // чек, который правим
   const [viewId, setViewId] = useState(0) // чек, файл которого смотрим
   const [attachTo, setAttachTo] = useState(null) // чек, к которому прикладываем файл
+
+  // из поиска: показать клиента за всё время, прокрутить к чеку, при надобности — открыть файл
+  const pending = useRef(null)
+  useEffect(() => {
+    if (!focus) return
+    pending.current = focus
+    setChatId(focus.chatId); setPeriod('all'); setKind('')
+  }, [focus?.n]) // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    const f = pending.current
+    if (!f || !rep || !rep.rows.some((r) => r.id === f.id)) return
+    pending.current = null
+    if (f.view) { setViewId(f.id); return }
+    setTimeout(() => {
+      const el = document.querySelector(`[data-receipt="${f.id}"]`)
+      if (!el) return
+      el.scrollIntoView({ block: 'center', behavior: 'smooth' })
+      el.classList.remove('flash'); void el.offsetWidth; el.classList.add('flash')
+    }, 60)
+  }, [rep, focus?.n]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const load = useCallback(() => api.receipts(chatId, period, kind).then(setRep).catch((e) => toast(errText(e), 'err')), [chatId, period, kind, toast])
   useEffect(() => { load() }, [load])
@@ -165,7 +185,7 @@ export default function Receipts({ toast, chats, openChat }) {
               </thead>
               <tbody>
                 {rep.rows.map((r) => (
-                  <tr key={r.id}>
+                  <tr key={r.id} data-receipt={r.id}>
                     <td className="muted nowrap">{new Date(r.paidAt * 1000).toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit', year: '2-digit' })}</td>
                     <td className="nowrap">
                       <button type="button" className="link-btn" onClick={() => openChat(r.chatId)}>{r.chatTitle}</button>
